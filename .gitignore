@@ -1,5 +1,11 @@
+# Python 관련
 __pycache__/
-.venv/
-.vscode/
 *.pyc
+.venv/
+
+# 설정 및 에디터 관련
+.vscode/
 .DS_Store
+
+# 프로젝트 분석 결과 (추가됨)
+results/*.csv

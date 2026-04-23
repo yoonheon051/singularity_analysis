@@ -2,66 +2,80 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from sensor_msgs.msg import JointState
+from rclpy.qos import QoSProfile, DurabilityPolicy
 import roboticstoolbox as rtb
 import numpy as np
+import csv
+import os
+from datetime import datetime
 
 class M0609SingularityMonitor(Node):
     def __init__(self):
         super().__init__('m0609_singularity_monitor')
         
+        # 1. 파일 저장 경로 및 헤더 설정
+        self.results_path = 'results/analysis_log.csv'
+        self.init_csv()
+
         self.get_logger().info('URDF 데이터를 /robot_description 토픽에서 기다리는 중...')
         
-        # 1. URDF 수신용 임시 구독자
+        # [기존 URDF 수신 로직 생략] - 이전 버전과 동일하게 작성하시면 됩니다.
         self.urdf_xml = None
-        self.subscription = self.create_subscription(
-            String,
-            '/robot_description',
-            self.urdf_callback,
-            10)
+        self.subscription = self.create_subscription(String, '/robot_description', self.urdf_callback, 10)
 
-        # URDF 데이터를 받을 때까지 노드를 회전하며 대기
         while self.urdf_xml is None:
             rclpy.spin_once(self)
 
-        # 2. 받은 URDF 문자열로 로봇 모델 로드
         try:
-            # m0609.urdf 파일이 따로 없어도 토픽의 내용으로 로드합니다.
             self.robot = rtb.models.URDF.Docce(self.urdf_xml)
             self.get_logger().info(f'로봇 모델 로드 성공: {self.robot.name}')
         except Exception as e:
             self.get_logger().error(f'모델 로드 실패: {str(e)}')
             return
 
-        # 3. 모델 로드 후 실시간 관절 상태 구독 시작
-        self.create_subscription(
-            JointState,
-            '/joint_states',
-            self.joint_callback,
-            10)
-        self.get_logger().info('실시간 모니터링 시작!')
+        self.create_subscription(JointState, '/joint_states', self.joint_callback, 10)
+        self.get_logger().info('실시간 모니터링 및 저장 시작!')
 
-    def urdf_callback(self, msg):
-        self.urdf_xml = msg.data
-        # 데이터를 한 번 받았으므로 구독 해제
-        self.destroy_subscription(self.subscription)
-        self.get_logger().info('URDF 데이터를 성공적으로 수신했습니다.')
+    def init_csv(self):
+        """CSV 파일 초기화 및 헤더 작성"""
+        if not os.path.exists('results'):
+            os.makedirs('results')
+        
+        with open(self.results_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            # 헤더: 시간, 관절각(6개), 가동성, 조건수, 야코비안(36개 원소)
+            header = ['timestamp', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'manipulability', 'condition_number']
+            for i in range(6):
+                for j in range(6):
+                    header.append(f'J_{i}{j}')
+            writer.writerow(header)
 
     def joint_callback(self, msg):
-        """RViz에서 조인트를 움직일 때마다 실행되는 콜백"""
         try:
-            # m0609의 6개 관절 각도 추출
-            # 실제 로봇의 관절 이름 순서에 따라 조정이 필요할 수 있습니다.
-            q = msg.position[:6] 
-            
+            q = msg.position[:6]
             J, w, cond = self.calculate_metrics(q)
             
-            # 터미널에 실시간 출력
+            # 1. 터미널 출력
             self.get_logger().info(f'Manipulability: {w:.4f} | Condition: {cond:.2f}')
+            
+            # 2. 파일 저장 로직
+            self.save_to_csv(q, J, w, cond)
+            
         except Exception as e:
-            self.get_logger().error(f'계산 오류: {str(e)}')
+            self.get_logger().error(f'데이터 처리 오류: {str(e)}')
+
+    def save_to_csv(self, q, J, w, cond):
+        """데이터를 CSV 한 줄로 저장"""
+        timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+        
+        # 데이터를 리스트로 구성
+        row = [timestamp] + list(q) + [w, cond] + J.flatten().tolist()
+        
+        with open(self.results_path, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(row)
 
     def calculate_metrics(self, joint_states):
-        """관절 각도를 받아 Jacobian과 특이점을 계산"""
         q = np.array(joint_states)
         J = self.robot.jacob0(q)
         w = self.robot.manipulability(q)
