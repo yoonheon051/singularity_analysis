@@ -3,6 +3,8 @@
 
 이 프로젝트는 m0609의 각 관절 각도를 Jacobian 행렬로 계산하여, Singularity를 분석합니다.
 
+2026.04.24 현재, m0609 6축 로봇팔만 지원하며, m0609의 시뮬레이션(Rviz2)은 https://github.com/yoonheon051/my_robot_description 여기서 확인할 수 있습니다.
+
 ## 개발환경
 OS: UBUNTU 22.04.05 LTS
 
