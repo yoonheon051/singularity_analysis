@@ -20,7 +20,8 @@ singularity_analysis
 ├── requirements.txt        # 의존성 라이브러리 목록
 ├── scripts/                # 실행할 메인 스크립트
 │   ├── calculate_jacobian.py
-│   └── m0609_ros_analyzer.py 
+│   ├── m0609_ros_analyzer.py 
+│   └── visualize_results.py
 └── results/                # 분석 결과 이미지나 로그 저장
 ```
 
