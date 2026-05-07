@@ -90,7 +90,7 @@ Jacobian 산출   | calculate_jacobian.py | jacob0(q) 함수로 $6 \times 6$ 행
 
 로봇의 관절 속도와 말단 속도의 관계:
 
-$\dot{x}$ =J(q)$\dot{q}$
+$\dot{x}$ =J(q)\dot{q}
 ˙
 	​$\dot{q}$
 
@@ -105,7 +105,7 @@ Manipulability
 
 Yoshikawa Manipulability Index:
 
-$w = \det(JJ^T)$
+w = \sqrt{\det(JJ^T)}
 
 - 값이 클수록 좋은 자세
 - 0에 가까울수록 특이점 접근
