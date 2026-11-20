@@ -9,3 +9,8 @@ __pycache__/
 
 # 프로젝트 분석 결과 (추가됨)
 results/*.csv
+# 테스트·colcon 빌드 결과물
+.pytest_cache/
+build/
+install/
+log/

@@ -1,4 +1,6 @@
 # 🐊 singularity_analysis
+[![tests](https://github.com/yoonheon051/singularity_analysis/actions/workflows/test.yml/badge.svg)](https://github.com/yoonheon051/singularity_analysis/actions/workflows/test.yml)
+
 동아대학교 기계공학과 2026-1학기 동역학1분반 취업공결 인정 과제
 
 ROS2 Humble 기반의 6축 산업용 로봇(M0609) 의 Jacobian 행렬을 실시간으로 계산하고,
@@ -69,7 +71,7 @@ singularity_analysis/                  # 저장소 (~/colcon_ws/src 에 clone)
     │   ├── plot_ellipsoid.py          #     자세별 타원체 그림      (ros2 run ... plot_ellipsoid)
     │   ├── velocity_demo.py           #     속도 폭주 vs DLS       (ros2 run ... velocity_demo)
     │   └── visualize_results.py       #     CSV 그래프             (ros2 run ... visualize_results)
-    └── test/test_singularity.py       #   ROS·Toolbox 없이 도는 검증 테스트
+    └── test/                          #   검증 테스트 (ROS 없이 실행, 아래 '테스트' 참고)
 ```
 
 결과(CSV·그림)는 `~/singularity_results/`에 저장합니다. 다른 곳에 두려면 환경변수 `SINGULARITY_RESULTS_DIR`을 지정하거나, launch 에서 `results_dir:=경로`를 줍니다.
@@ -544,12 +546,21 @@ ros2 run singularity_analysis calculate_jacobian  # 한 자세 분석
 
 ### 8. 테스트
 
-Robotics Toolbox·ROS 없이도 도는 테스트입니다. 같은 M0609 URDF로 직접 만든 NumPy 기구학으로 URDF 정리(그리퍼·미믹 관절 제거), Jacobian, 행렬식 분해, 특이점 분류, 타원체, DLS 결과를 확인합니다.
+ROS 없이 도는 테스트 26개와, Robotics Toolbox가 있을 때 추가로 도는 교차 검증 13개입니다. Robotics Toolbox 대신, 같은 M0609 URDF로 직접 만든 NumPy 기구학(`test/conftest.py`의 `ReferenceRobot`)을 쓰고, 분석 노드는 가짜 `rclpy`로 처음부터 실행합니다.
 
 ```bash
-colcon test --packages-select singularity_analysis && colcon test-result --verbose
-# 또는 저장소에서 바로: cd singularity_analysis && python3 -m pytest test/
+python3 -m pytest singularity_analysis/test -v      # 저장소 최상위에서
+colcon test --packages-select singularity_analysis && colcon test-result --verbose   # 또는 colcon 으로
 ```
+
+| 파일 | 확인하는 것 |
+|---|---|
+| `test_singularity.py` | URDF 정리(그리퍼·미믹 관절 제거), Jacobian vs 수치미분, 행렬식 분해, 특이점 분류, 타원체가 해당 종류에서만 납작해지는지, DLS 관절 속도 |
+| `test_analyzer.py` | 분석 노드: 그리퍼 URDF로 6축 모델 생성, 관절을 이름으로 찾기(순서가 섞이고 그리퍼 관절이 있어도), CSV 기록·flush·닫기, 지표 토픽 = CSV, 타원체 마커 위치·색, 종류가 바뀔 때만 경고, 관절 이름 불일치 경고 1회, 잘못된 URDF면 빈 CSV 없이 종료 |
+| `test_scripts.py` | `visualize_results`(새 CSV·예전 CSV+inf, 최신 CSV 고르기), `calculate_jacobian`, `plot_ellipsoid`(기본 4자세가 의도한 종류로 분류), `velocity_demo`가 끝까지 돌고 결과 파일을 남기는지 |
+| `test_toolbox.py` | **실제 Robotics Toolbox**와 교차 검증: fkine·Jacobian이 `ReferenceRobot`과 같은지, 분석 결과가 같은지, 원본 URDF의 끝 링크가 둘(`base`, `tool0`)인지, RG2 xacro가 6축으로 불러와지는지, README의 DLS 숫자가 재현되는지. Toolbox를 불러올 수 없으면 건너뜀 |
+
+**자동 테스트(GitHub Actions)**: push할 때마다 `.github/workflows/test.yml`이 Ubuntu 22.04 + Python 3.10(ROS2 Humble과 같은 환경)에서 Robotics Toolbox까지 설치해 전체 테스트를 돌립니다. 결과는 README 맨 위 배지와 저장소의 **Actions** 탭에서 볼 수 있습니다.
 
 ## 분석 흐름
 

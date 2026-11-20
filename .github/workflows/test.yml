@@ -1,0 +1,23 @@
+# push 할 때마다 테스트 실행 (Ubuntu 22.04 + Python 3.10 = ROS2 Humble 과 같은 환경)
+# ROS 없이 도는 테스트 전부 + 실제 Robotics Toolbox 교차 검증(test_toolbox.py)
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt pytest pytest-github-actions-annotate-failures
+          pip install xacro || echo "xacro 를 설치하지 못해 그리퍼 xacro 테스트는 건너뜁니다"
+      - name: Run tests
+        run: python -m pytest singularity_analysis/test -v -rs

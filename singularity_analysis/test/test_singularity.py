@@ -1,82 +1,17 @@
 """
 singularity.py 와 velocity_demo.py 검증 (ROS·Robotics Toolbox 없이 실행 가능)
 
-Toolbox 대신, 같은 M0609 URDF로 직접 만든 NumPy 기구학(ReferenceRobot)을 쓴다.
-    colcon test --packages-select singularity_analysis
-    또는  cd singularity_analysis && python3 -m pytest test/
+Toolbox 대신, 같은 M0609 URDF로 직접 만든 NumPy 기구학(conftest.ReferenceRobot)을 쓴다.
 """
-import math
-import os
-import sys
 import xml.etree.ElementTree as ET
 
 import numpy as np
 import pytest
 
-PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PKG_DIR)
-from singularity_analysis import singularity as sg  # noqa: E402
+from conftest import ELBOW_NEAR, NORMAL, URDF, WRIST_NEAR, needs_urdf
+from singularity_analysis import singularity as sg
 
-URDF = os.path.join(PKG_DIR, '..', 'my_robot_description', 'urdf', 'm0609.urdf.xacro')
-pytestmark = pytest.mark.skipif(not os.path.isfile(URDF), reason='my_robot_description URDF 가 없음')
-
-NORMAL = [0, -0.3, 1.2, 0, 1.0, 0]
-
-
-def _rpy(r, p, y):
-    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
-    return np.array([[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
-                     [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
-                     [-sp, cp * sr, cp * cr]])
-
-
-def _axis_angle(a, t):
-    a = a / np.linalg.norm(a)
-    K = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
-    return np.eye(3) + math.sin(t) * K + (1 - math.cos(t)) * K @ K
-
-
-class ReferenceRobot:
-    """URDF 를 직접 읽어 만든 순기구학·기하학적 Jacobian (Toolbox 의 fkine/jacob0 와 같은 형태)"""
-
-    def __init__(self, urdf_xml):
-        root = ET.fromstring(urdf_xml)
-        self.joints = {}
-        for j in root.findall('joint'):
-            o, ax = j.find('origin'), j.find('axis')
-            self.joints[j.find('child').get('link')] = dict(
-                type=j.get('type'), parent=j.find('parent').get('link'),
-                xyz=np.array([float(v) for v in (o.get('xyz') if o is not None else '0 0 0').split()]),
-                rpy=[float(v) for v in (o.get('rpy') if o is not None and o.get('rpy') else '0 0 0').split()],
-                axis=np.array([float(v) for v in ax.get('xyz').split()]) if ax is not None else None)
-        self.link_dict = {l.get('name'): None for l in root.findall('link')}
-        self.n = sum(j['type'] == 'revolute' for j in self.joints.values())
-
-    def _frames(self, q, end):
-        chain, link = [], end
-        while link in self.joints:
-            chain.append(self.joints[link])
-            link = self.joints[link]['parent']
-        T, i, axes = np.eye(4), 0, []
-        for j in reversed(chain):
-            A = np.eye(4); A[:3, :3] = _rpy(*j['rpy']); A[:3, 3] = j['xyz']; T = T @ A
-            if j['type'] == 'revolute':
-                axes.append((T[:3, :3] @ j['axis'], T[:3, 3].copy()))
-                R = np.eye(4); R[:3, :3] = _axis_angle(j['axis'], q[i]); T = T @ R
-                i += 1
-        return T, axes
-
-    def fkine(self, q, end=sg.END_LINK):
-        return self._frames(q, end)[0]
-
-    def jacob0(self, q, end=sg.END_LINK):
-        T, axes = self._frames(q, end)
-        return np.array([np.r_[np.cross(z, T[:3, 3] - p), z] for z, p in axes]).T
-
-
-@pytest.fixture(scope='module')
-def robot():
-    return ReferenceRobot(sg.arm_only_urdf(sg.read_urdf(URDF)))
+pytestmark = needs_urdf
 
 
 def shoulder_pose(robot):
@@ -97,23 +32,12 @@ def test_arm_only_keeps_base_to_link6_chain():
     assert sg.root_link(xml) == 'base_link'
 
 
-def test_arm_only_drops_gripper_and_mimic_joints():
-    # link_6 뒤에 그리퍼(미믹 관절 포함)를 붙인 URDF 를 만들어도 팔 6축만 남아야 함
-    root = ET.fromstring(sg.read_urdf(URDF))
-    for name in ('gripper_base', 'left_finger', 'right_finger'):
-        ET.SubElement(root, 'link', {'name': name})
-    j = ET.SubElement(root, 'joint', {'name': 'tool_mount', 'type': 'fixed'})
-    ET.SubElement(j, 'parent', {'link': 'link_6'}); ET.SubElement(j, 'child', {'link': 'gripper_base'})
-    for side, mimic in (('left', None), ('right', 'left_finger_joint')):
-        j = ET.SubElement(root, 'joint', {'name': f'{side}_finger_joint', 'type': 'revolute'})
-        ET.SubElement(j, 'parent', {'link': 'gripper_base'}); ET.SubElement(j, 'child', {'link': f'{side}_finger'})
-        ET.SubElement(j, 'axis', {'xyz': '0 0 1'})
-        if mimic:
-            ET.SubElement(j, 'mimic', {'joint': mimic})
-    arm = ET.fromstring(sg.arm_only_urdf(ET.tostring(root, encoding='unicode')))
+def test_arm_only_drops_gripper_and_mimic_joints(gripper_urdf):
+    # link_6 뒤에 그리퍼(미믹 관절 포함)를 붙인 URDF 를 줘도 팔 6축만 남아야 함
+    arm = ET.fromstring(sg.arm_only_urdf(gripper_urdf))
     assert [j.get('name') for j in arm.findall('joint')] == sg.JOINT_NAMES
     with pytest.raises(ValueError):
-        sg.arm_only_urdf(ET.tostring(root, encoding='unicode'), end_link='no_such_link')
+        sg.arm_only_urdf(gripper_urdf, end_link='no_such_link')
 
 
 # ---------------------------------------------------------------- 기구학·지표
@@ -140,8 +64,8 @@ def test_manipulability_is_product_of_singular_values(robot):
 
 def test_classification(robot):
     assert sg.analyze(robot, NORMAL)['types'] == []
-    assert sg.analyze(robot, [0, -0.3, 1.2, 0, 0.05, 0])['types'] == ['wrist']
-    assert sg.analyze(robot, [0, 0.5, 0.05, 0, 1.0, 0])['types'] == ['elbow']
+    assert sg.analyze(robot, WRIST_NEAR)['types'] == ['wrist']
+    assert sg.analyze(robot, ELBOW_NEAR)['types'] == ['elbow']
     assert sg.analyze(robot, shoulder_pose(robot))['types'] == ['shoulder']
     assert sg.label(sg.analyze(robot, [0, -0.3, 1.2, 0, 0.12, 0])['types']) == 'normal'   # 임계값 0.1 바깥
 
