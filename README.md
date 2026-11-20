@@ -23,7 +23,9 @@ Framework: ROS2 Humble
 
 Language: Python 3.10.12
 
-Key Library: NumPy 1.24.4, Roboticstoolbox-python, PyKDL
+Key Library: NumPy 1.24.4, Roboticstoolbox-python, PyKDL, pandas·matplotlib(시각화)
+
+설치: `pip install -r requirements.txt`
 
 ## 파일 구성
 ```
@@ -57,7 +59,7 @@ singularity_analysis
 --------------------------------------------------------------------------------
 항목            | 실제 구현 파일           | 구현 방식
 --------------------------------------------------------------------------------
-Kinematic Tree | m0609_ros_analyzer.py | rtb.models.URDF를 통한 모델 로드
+Kinematic Tree | m0609_ros_analyzer.py | rtb.ERobot.URDF를 통한 모델 로드
 --------------------------------------------------------------------------------
 실시간 데이터 획득 | m0609_ros_analyzer.py | /joint_states 토픽 구독 및 실시간 연산
 --------------------------------------------------------------------------------
@@ -154,28 +156,34 @@ cond = np.linalg.cond(J)
 5. Wrist Singularity 테스트
 
 ```
-test_q = [0, 0, np.pi/2, 0, 0.01, 0]
+--q 0 0 1.5708 0 0.01 0   (기본값)
 ```
-5번 관절(q5)을 0 근처로 설정하여 Wrist Singularity를 인위적으로 생성
+5번 관절(q5)을 0 근처로 설정하여 Wrist Singularity를 인위적으로 생성. 다른 자세는 `--q`로 6개 각도(rad)를 넘깁니다.
 
 6. 실행 방법
+
+M0609 URDF 파일 경로를 인자로 줍니다(생략하면 현재 폴더의 `m0609.urdf`).
+[my_robot_description](https://github.com/yoonheon051/my_robot_description)의 `urdf/m0609.urdf.xacro`는 xacro 매크로가 없는 일반 URDF라 그대로 써도 되고, `xacro`로 변환해도 됩니다.
 
 ```
 cd ~/singularity_analysis
 
-python3 scripts/calculate_jacobian.py
+ros2 run xacro xacro ~/colcon_ws/src/my_robot_description/urdf/m0609.urdf.xacro > m0609.urdf
+python3 scripts/calculate_jacobian.py m0609.urdf
+python3 scripts/calculate_jacobian.py m0609.urdf --q 0 -0.3 1.2 0 1.0 0   # 다른 자세
 ```
 
-7. 실행 예시
+7. 실행 예시 (기본 자세, my_robot_description의 m0609 URDF 기준)
 
 ```
+Joint angles (rad): [0.0, 0.0, 1.571, 0.0, 0.01, 0.0]
 Jacobian Matrix:
 [[ ... ]]
-
-Determinant: 0.000001
-Manipulability Index: 0.002314
-Condition Number: 845.23
+Determinant: -0.000557
+Manipulability Index: 0.000557
+Condition Number: 797.47
 ```
+같은 URDF에서 특이점이 아닌 자세(`--q 0 -0.3 1.2 0 1.0 0`)는 Manipulability 0.0198, Condition Number 20.1 정도로, 손목 특이점 근처보다 조건수가 약 40배 작습니다.
 
 ### m0609_ros_analyzer.py
 ROS2 기반 실시간 특이점 분석 노드입니다.
@@ -320,7 +328,7 @@ M0609 URDF 및 /joint_states 발행 필요
 예시 : 
 
 ```
-ros2 launch my_robot_description display.launch.py
+ros2 launch my_robot_description rviz_sim.launch.py
 ```
 
 m0609 RViz2 시뮬레이션: https://github.com/yoonheon051/my_robot_description
@@ -350,24 +358,54 @@ results/analysis_log.csv
 ```
 python3 scripts/visualize_results.py
 ```
+그래프는 화면에 띄우고 `results/singularity_analysis_plot.png`로도 저장합니다. 다른 CSV를 보려면 경로를 인자로 줍니다(`python3 scripts/visualize_results.py 다른.csv`).
 
 ## 분석 흐름
 
+### 전체 구성
+
+```mermaid
+flowchart LR
+    SIM["RViz2 시뮬레이션<br/>my_robot_description"] -- "/robot_description (URDF)" --> AN["m0609_ros_analyzer.py"]
+    SIM -- "/joint_states" --> AN
+    REAL["실제 로봇 (선택)"] -. "/joint_states" .-> AN
+    AN -- "행마다 기록" --> CSV[("results/analysis_log.csv")]
+    CSV --> VIS["visualize_results.py"]
+    VIS --> PNG[("results/singularity_analysis_plot.png")]
+    URDF[("m0609.urdf")] --> CJ["calculate_jacobian.py<br/>한 자세만 계산"]
 ```
-/joint_states
-      ↓
-Joint Angle(q)
-      ↓
-Jacobian Calculation
-      ↓
-Manipulability / Condition Number
-      ↓
-Singularity Detection
-      ↓
-CSV Logging
-      ↓
-Visualization
+
+### 실시간 분석 노드 (`m0609_ros_analyzer.py`)
+
+```mermaid
+flowchart TD
+    A(["노드 시작"]) --> B["results/analysis_log.csv 준비<br/>없으면 헤더 작성"]
+    B --> C["/robot_description 대기<br/>Transient Local로 늦게 켜도 받음"]
+    C --> D["URDF → 로봇 모델<br/>rtb.ERobot.URDF"]
+    D --> E{"모델 생성 성공?"}
+    E -- 아니요 --> X(["오류로 종료"])
+    E -- 예 --> F[["/joint_states 수신할 때마다"]]
+    F --> G["이름으로 joint_1 ~ joint_6 각도 q 추출"]
+    G --> H{"6개 모두 있음?"}
+    H -- 아니요 --> W["건너뜀<br/>처음 한 번만 이름 불일치 경고"]
+    H -- 예 --> J["Jacobian J = jacob0(q, end=link_6)<br/>6x6"]
+    J --> M["Manipulability w = √det(J·Jᵀ)<br/>Condition Number = σmax/σmin"]
+    M --> L["터미널 출력 + CSV 한 줄 기록<br/>시각, q1~q6, w, 조건수, J 36개"]
 ```
+
+### 특이점 판단
+
+```mermaid
+flowchart LR
+    Q["자세 q"] --> W{"Manipulability w"}
+    W -- "0.01 이상" --> N(["Normal"])
+    W -- "0.01 미만" --> NS(["Near Singularity<br/>그래프 빨간 점선 아래"])
+    W -- "거의 0 · 조건수 급증" --> S(["Singularity<br/>조건수 그래프의 뾰족한 봉우리<br/>inf면 빨간 X"])
+```
+0.01은 `visualize_results.py`가 그래프에 그리는 경고선 값입니다. 예를 들어 my_robot_description의 M0609에서 q5를 0.8 → -0.8 rad로 움직이면, w는 q5 = 0에서 0으로 떨어지고(V자) 조건수는 10¹⁷ 정도까지 치솟습니다.
+
+### 말단 링크를 `link_6`으로 지정하는 이유
+M0609 URDF에는 끝이 열린 링크가 두 개 있습니다. 높이 표시용 `base`(base_link 위 0.45 m)와 말단 `tool0`입니다. Robotics Toolbox는 말단을 지정하지 않으면 그중 **첫 번째**를 말단으로 고르는데, URDF에서 `base`가 먼저 나와서 엉뚱한 Jacobian이 계산될 수 있습니다(터미널에 "More than one end-effector present" 경고가 뜹니다). 그래서 두 스크립트 모두 `link_6`을 명시합니다. `link_6`은 `tool0`과 원점이 같아 `jacob0` 결과가 같습니다.
 
 ## 특이점 판단 기준
 

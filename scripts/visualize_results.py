@@ -1,6 +1,8 @@
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+import sys
 
 """
 [ 로봇 기구학 성능 지표 시각화 가이드 ]
@@ -52,26 +54,39 @@ def plot_singularity_metrics(csv_path):
     ##############################################
 
     # 조건수는 특이점 부근에서 값이 기하급수적으로 커지므로 로그 스케일(Log Scale)로 시각화
-    ax2.plot(x_axis, df['condition_number'].values, color='green', linewidth=2, label='Condition Number')
-    
+    cond = df['condition_number'].astype(float).values
+    ax2.plot(x_axis, cond, color='green', linewidth=2, label='Condition Number')
+
+    # 무한대(완전 특이점)는 로그 그래프에 그려지지 않아 사라지므로, 그래프 맨 위에 빨간 X로 따로 표시
+    singular = np.isinf(cond)
+    if singular.any():
+        finite = cond[np.isfinite(cond)]
+        top = finite.max() * 10 if finite.size else 1e3
+        ax2.scatter(np.flatnonzero(singular), np.full(singular.sum(), top), color='red', marker='x', s=40,
+                    zorder=3, label=f'Singular (cond = inf) x{singular.sum()}')   # 기본 글꼴에 한글이 없어 영어로
+
     ax2.set_yscale('log')                                # Y축을 로그 스케일로 설정 (중요)
     ax2.set_xlabel('Sample Count (Time Step)')           # X축 라벨: 데이터 수집 순서
     ax2.set_ylabel('Condition Number (Log Scale)')       # Y축 라벨
     ax2.set_title('Jacobian Condition Number Over Time')
     ax2.grid(True, linestyle='--', alpha=0.7)
-    ax2.legend(loc='upper right')
+    ax2.legend(loc='upper left')   # 오른쪽 위는 최근 특이점 표시(X)와 겹칠 수 있어 왼쪽에
 
     # 4. 레이아웃 최적화: 그래프 간 간격 자동 조정 및 화면 출력
     plt.tight_layout()
 
-    # 이미지 저장이 필요한 경우 주석 해제
-    # plt.savefig('results/singularity_analysis_plot.png')
-    
+    # 5. 그래프를 CSV와 같은 results/ 폴더에 이미지로 저장 (화면이 없는 환경에서도 결과가 남도록)
+    png_path = os.path.join(os.path.dirname(csv_path), 'singularity_analysis_plot.png')
+    plt.savefig(png_path, dpi=150)
+    print(f"그래프 저장: {png_path}")
+
     plt.show()
 
 # 파이썬 스크립트 실행 엔트리 포인트
 if __name__ == "__main__":
-    
-    # 데이터 수집 결과인 analysis_log.csv 경로 지정
-    csv_file = 'results/analysis_log.csv'
+
+    # 데이터 수집 결과인 analysis_log.csv 경로 지정 (실행 위치와 상관없이 저장소의 results/ 폴더)
+    # 다른 파일을 보려면 인자로 경로를 준다: python3 scripts/visualize_results.py 다른.csv
+    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    csv_file = sys.argv[1] if len(sys.argv) > 1 else os.path.join(repo_dir, 'results', 'analysis_log.csv')
     plot_singularity_metrics(csv_file)

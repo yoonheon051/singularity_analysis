@@ -10,6 +10,15 @@ import os
 import tempfile
 from datetime import datetime
 
+# 결과 폴더: 실행 위치(현재 폴더)와 상관없이 항상 저장소의 results/ 에 저장
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RESULTS_DIR = os.path.join(REPO_DIR, 'results')
+JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']   # M0609 URDF의 관절 이름
+# Jacobian을 계산할 말단 링크. M0609 URDF에는 끝이 열린 링크가 두 개(높이 표시용 'base', 말단 'tool0') 있어서,
+# 지정하지 않으면 Toolbox가 그중 첫 번째(=base)를 말단으로 골라 엉뚱한 Jacobian이 나올 수 있다.
+# link_6 은 tool0 과 원점이 같아 jacob0 결과가 같고, 그리퍼가 달린 URDF에도 항상 있다.
+END_LINK = 'link_6'
+
 class M0609SingularityMonitor(Node):
     '''
     M0609의 특이점(Singularity) 및 가동성(Manipulability)을 실시간으로 모니터링하고, 
@@ -21,9 +30,10 @@ class M0609SingularityMonitor(Node):
         
         # 1. 데이터 저장 설정
         # 분석 결과를 저장할 CSV 파일 경로 설정 및 결과 폴더 자동 생성 
-        self.results_path = 'results/analysis_log.csv'
-        os.makedirs('results', exist_ok=True)
+        self.results_path = os.path.join(RESULTS_DIR, 'analysis_log.csv')
+        os.makedirs(RESULTS_DIR, exist_ok=True)
         self.init_csv()
+        self._missing_warned = False   # 관절 이름이 안 맞을 때 경고를 한 번만 출력
 
 
         # 2. 로봇 모델 정보(URDF) 수신을 위한 설정
@@ -50,7 +60,7 @@ class M0609SingularityMonitor(Node):
             # 기본 방식: Toolbox의 표준 URDF 로더 사용 시도
             try:
                 self.robot = rtb.ERobot.URDF(tmp_path)
-                self.get_logger().info(f'ERobot 방식으로 모델 로드 성공')
+                self.get_logger().info('ERobot 방식으로 모델 로드 성공')
             except Exception as e1:
                 # 라이브러리 버전이나 환경에 따른 대안 로드 방식(추출 로직 포함)
                 self.get_logger().warn(f'ERobot 방식 실패, 대안 시도... ({str(e1)})')
@@ -74,11 +84,17 @@ class M0609SingularityMonitor(Node):
                 os.remove(tmp_path)
                 
         except Exception as e:
+            # 모델이 없으면 분석을 할 수 없으므로, 아무것도 안 하는 노드로 남지 않고 오류로 종료
             self.get_logger().error(f'최종 모델 로드 실패: {str(e)}')
-            return
+            raise RuntimeError(f'로봇 모델을 만들지 못했습니다: {e}') from e
 
         # 모델이 인식하는 로봇의 자유도(DoF, Degree of Freedom) 저장(6축 vs. 12축 등 구분용)
         self.dof = self.robot.n
+
+        # 말단 링크를 명시 (없으면 Toolbox 기본값 사용)
+        self.end = END_LINK if END_LINK in self.robot.link_dict else None
+        if self.end is None:
+            self.get_logger().warn(f"'{END_LINK}' 링크가 없어 Toolbox 기본 말단 링크를 사용합니다: {[l.name for l in self.robot.ee_links]}")
         
         # 실시간 관절 각도 데이터를 수신하기 위해 /joint_states 토픽 구독
         self.create_subscription(JointState, '/joint_states', self.joint_callback, 10)
@@ -107,15 +123,21 @@ class M0609SingularityMonitor(Node):
         try:
             # 1. 수신된 조인트 이름과 위치값을 매핑하여 딕셔너리화(순서 혼선 방지)
             joint_map = {name: pos for name, pos in zip(msg.name, msg.position)}
-            target_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
-            
+
             # 2. 모델 설정에 맞춰 분석할 관절 각도 추출
             if self.dof == 6:
                 # 순수 6축 모델일 경우 정의된 6개 조인트만 사용
-                q = [joint_map[name] for name in target_names if name in joint_map]
+                q = [joint_map[name] for name in JOINT_NAMES if name in joint_map]
             else:
-                # 그리퍼 등이 포함된 모델일 경우 정의된 6개 조인트만 사용 
+                # 그리퍼 등이 포함된 모델일 경우 메시지 앞쪽부터 모델 자유도만큼 사용 (본체 6축이 앞에 있다고 가정)
                 q = list(msg.position[:self.dof])
+
+            # 이름이 달라 관절을 못 찾으면 아무 기록도 안 남기고 조용히 넘어가므로, 한 번은 알려 준다
+            if len(q) != self.dof and not self._missing_warned:
+                self._missing_warned = True
+                self.get_logger().warn(
+                    f'/joint_states 에서 관절 {self.dof}개를 찾지 못해 분석을 건너뜁니다. '
+                    f'받은 이름: {list(msg.name)} / 기대한 이름: {JOINT_NAMES}')
 
             # 3. 데이터 개수가 모델 DoF와 일치할 때만 수학적 연산 진행
             if len(q) == self.dof:
@@ -140,23 +162,22 @@ class M0609SingularityMonitor(Node):
         '''
 
         # 1. 기하학적 Jacobian 계산 (Geometrical Jacobian)
-        J_full = self.robot.jacob0(q) 
+        J_full = self.robot.jacob0(q, end=self.end)
 
         # 2. 본체 분석을 위해 6x6 정방 행렬(Square Matrix)로 슬라이싱
         # 모델이 12DoF더라도 본체 6축 제어 성능 분석을 위해 앞의 6열만 사용
-        J = J_full[:, :6] 
+        J = J_full[:, :6]
 
-        # 3. 가동성 지수 계산(Yoshikawa's index)
-        w = self.robot.manipulability(q)
+        # 3. 가동성 지수 계산(Yoshikawa's index): w = sqrt(det(J·Jᵀ))
+        # 조건수와 같은 6x6 J로 계산해야 두 지표가 같은 대상을 본다 (robot.manipulability(q)는 말단·열을 따로 고름)
+        w = float(np.sqrt(max(np.linalg.det(J @ J.T), 0.0)))
 
         # 4. 행렬 수치 안정성(조건수) 계산
+        # 특이값 분해(SVD)로 계산하므로 특이점 근처에서도 실제 크기(수천~수조)를 그대로 기록한다.
+        # (예전처럼 det 기준으로 inf 를 넣으면 로그 그래프에서 그 점이 사라져, 가장 중요한 특이점 구간이 안 보였음)
+        # 완전히 특이(최소 특이값 0)하면 numpy 가 inf 를 돌려준다.
         try:
-            # 행렬식(Determinant)이 0이면 특이점이므로 계산 전 확인
-            det_J = np.linalg.det(J)
-            if np.abs(det_J) > 1e-6:
-                cond = np.linalg.cond(J) # Jacobian의 최대 특이값 / 최소 특이값
-            else:
-                cond = float('inf') # 특이점 발생 시 조건 수는 무한대
+            cond = float(np.linalg.cond(J))  # Jacobian의 최대 특이값 / 최소 특이값
         except Exception:
             cond = float('inf')
             
