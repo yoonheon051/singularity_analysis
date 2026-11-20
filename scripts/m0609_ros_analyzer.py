@@ -3,12 +3,15 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, DurabilityPolicy
+from visualization_msgs.msg import Marker, MarkerArray
 import roboticstoolbox as rtb
 import numpy as np
 import csv
 import os
 import tempfile
 from datetime import datetime
+
+import singularity as sg   # 같은 폴더의 공통 계산 (타원체, 특이점 종류)
 
 # 결과 폴더: 실행 위치(현재 폴더)와 상관없이 항상 저장소의 results/ 에 저장
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +20,15 @@ JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
 # Jacobian을 계산할 말단 링크. M0609 URDF에는 끝이 열린 링크가 두 개(높이 표시용 'base', 말단 'tool0') 있어서,
 # 지정하지 않으면 Toolbox가 그중 첫 번째(=base)를 말단으로 골라 엉뚱한 Jacobian이 나올 수 있다.
 # link_6 은 tool0 과 원점이 같아 jacob0 결과가 같고, 그리퍼가 달린 URDF에도 항상 있다.
-END_LINK = 'link_6'
+END_LINK = sg.END_LINK
+
+# CSV 열: 시간, 관절각 6개, 가동성, 조건수, 특이점 종류·지표, 6x6 Jacobian 36개
+CSV_HEADER = (['timestamp', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'manipulability', 'condition_number',
+               'singularity_type', 'sigma_min', 'wrist_idx', 'elbow_idx', 'shoulder_idx']
+              + [f'J_{i}{j}' for i in range(6) for j in range(6)])
+
+ELLIPSOID_TOPIC = '/manipulability_ellipsoid'   # RViz에서 MarkerArray 로 추가해서 봄
+ELLIPSOID_SCALE = 0.3                           # 타원체 반지름(m/s 또는 rad/s per rad/s)을 RViz에서 몇 m 로 그릴지
 
 class M0609SingularityMonitor(Node):
     '''
@@ -34,6 +45,7 @@ class M0609SingularityMonitor(Node):
         os.makedirs(RESULTS_DIR, exist_ok=True)
         self.init_csv()
         self._missing_warned = False   # 관절 이름이 안 맞을 때 경고를 한 번만 출력
+        self._last_type = 'normal'     # 특이점 종류가 바뀔 때만 알리기 위함
 
 
         # 2. 로봇 모델 정보(URDF) 수신을 위한 설정
@@ -95,23 +107,34 @@ class M0609SingularityMonitor(Node):
         self.end = END_LINK if END_LINK in self.robot.link_dict else None
         if self.end is None:
             self.get_logger().warn(f"'{END_LINK}' 링크가 없어 Toolbox 기본 말단 링크를 사용합니다: {[l.name for l in self.robot.ee_links]}")
-        
+
+        # 손목 중심 링크가 있으면 특이점 종류(손목/팔꿈치/어깨) 분류와 분해 타원체를 계산
+        self.wrist = sg.WRIST_LINK if sg.WRIST_LINK in self.robot.link_dict else None
+        if self.wrist is None:
+            self.get_logger().warn(f"'{sg.WRIST_LINK}' 링크가 없어 특이점 종류 분류는 하지 않습니다.")
+        base = getattr(self.robot, 'base_link', None)
+        self.frame_id = base.name if base is not None else 'base_link'
+
+        # RViz 시각화: 가동성 타원체 (Add → By topic → /manipulability_ellipsoid → MarkerArray)
+        self.marker_pub = self.create_publisher(MarkerArray, ELLIPSOID_TOPIC, 10)
+
         # 실시간 관절 각도 데이터를 수신하기 위해 /joint_states 토픽 구독
         self.create_subscription(JointState, '/joint_states', self.joint_callback, 10)
         self.get_logger().info(f'모니터링 시작! (DOF: {self.dof})')
 
     def init_csv(self):
         # CSV 파일의 헤더(열 이름)를 정의하고 생성
-        if not os.path.exists(self.results_path):
-            with open(self.results_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                # 기본 정보: 시간, 관절각(6개), 가동성 지수, 조건수
-                header = ['timestamp', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'manipulability', 'condition_number']
-                # 상세 분석을 위해 6x6 Jacobian 행렬의 각 원소(J00~J55)를 열로 추가
-                for i in range(6):
-                    for j in range(6):
-                        header.append(f'J_{i}{j}')
-                writer.writerow(header)
+        if os.path.exists(self.results_path):
+            with open(self.results_path, newline='') as f:
+                old_header = next(csv.reader(f), None)
+            if old_header == CSV_HEADER:
+                return   # 같은 형식이면 이어서 기록
+            # 열 구성이 다른 예전 파일에 이어 쓰면 pandas 가 읽지 못하므로, 예전 파일은 이름을 바꿔 보관
+            backup = self.results_path.replace('.csv', datetime.now().strftime('_old_%Y%m%d_%H%M%S.csv'))
+            os.replace(self.results_path, backup)
+            self.get_logger().warn(f'열 구성이 다른 예전 CSV 를 {backup} 로 옮겼습니다.')
+        with open(self.results_path, 'w', newline='') as f:
+            csv.writer(f).writerow(CSV_HEADER)
 
     def urdf_callback(self, msg):
         # 로봇 구조 정보 수신 시 호출되는 콜백 함수
@@ -142,63 +165,90 @@ class M0609SingularityMonitor(Node):
             # 3. 데이터 개수가 모델 DoF와 일치할 때만 수학적 연산 진행
             if len(q) == self.dof:
                 q_np = np.array(q)
-                # 기구학 지표 계산 함수 호출
-                J, w, cond = self.calculate_metrics(q_np)
-                
-                # 계산 결과 실시간 로그 출력
-                self.get_logger().info(f'Manipulability: {w:.4f} | Condition: {cond:.2f}')
-                # 분석 결과 파일 저장
-                self.save_to_csv(q_np, J, w, cond)
-                
+                # 기구학 지표 계산 (singularity.py):
+                # - Jacobian(J): 관절 속도와 말단 속도 사이의 선형 매핑 행렬 (말단 link_6, 6x6)
+                # - Manipulability(w) = sqrt(det(J·Jᵀ)): 0에 가까우면 특이점
+                # - Condition Number = σmax/σmin (SVD): 특이점 근처에서도 실제 크기를 그대로 기록 (완전 특이면 inf)
+                # - 특이점 종류: 손목·팔꿈치·어깨 지표 (0에 가까울수록 그 특이점에 가까움)
+                a = sg.analyze(self.robot, q_np, end=self.end, wrist=self.wrist)
+                kind = sg.label(a['types'])
+
+                # 계산 결과 로그: 매 메시지(수십 Hz)마다 찍으면 터미널이 넘치므로 1초에 한 번
+                self.get_logger().info(
+                    f"Manipulability: {a['manipulability']:.4f} | Condition: {a['condition_number']:.2f} | {kind}",
+                    throttle_duration_sec=1.0)
+                # 특이점 종류가 바뀌는 순간은 바로 알림
+                if kind != self._last_type:
+                    if kind == 'normal':
+                        self.get_logger().info('특이점 영역을 벗어났습니다.')
+                    else:
+                        self.get_logger().warn(f'특이점 근처 진입: {kind} (지표: {self._fmt_indices(a)})')
+                    self._last_type = kind
+
+                # 분석 결과 파일 저장 + RViz 타원체
+                self.save_to_csv(q_np, a, kind)
+                self.publish_ellipsoids(q_np, a)
+
         except Exception as e:
             self.get_logger().error(f'데이터 처리 중 오류 발생: {str(e)}')
 
-    def calculate_metrics(self, q):
-        '''
-        Jacobian 기반의 기구학적 성능 지표를 계산하는 함수
-        - Jacobian(J): 관절 속도와 말단 속도 사이의 선형 매핑 행렬
-        - Manipuability(w): 로봇이 특정 자세에서 모든 방향으로 얼마나 자유롭게 움직일 수 있는가(0에 가까우면 특이점)
-        - Condition Number: Jacobian 행렬의 수치적 안정성(1에 가까울수록 이상적, 클수록 특이점 근처)
-        '''
+    @staticmethod
+    def _fmt_indices(a):
+        return 'n/a' if a['indices'] is None else ', '.join(f'{k}={v:.3f}' for k, v in a['indices'].items())
 
-        # 1. 기하학적 Jacobian 계산 (Geometrical Jacobian)
-        J_full = self.robot.jacob0(q, end=self.end)
-
-        # 2. 본체 분석을 위해 6x6 정방 행렬(Square Matrix)로 슬라이싱
-        # 모델이 12DoF더라도 본체 6축 제어 성능 분석을 위해 앞의 6열만 사용
-        J = J_full[:, :6]
-
-        # 3. 가동성 지수 계산(Yoshikawa's index): w = sqrt(det(J·Jᵀ))
-        # 조건수와 같은 6x6 J로 계산해야 두 지표가 같은 대상을 본다 (robot.manipulability(q)는 말단·열을 따로 고름)
-        w = float(np.sqrt(max(np.linalg.det(J @ J.T), 0.0)))
-
-        # 4. 행렬 수치 안정성(조건수) 계산
-        # 특이값 분해(SVD)로 계산하므로 특이점 근처에서도 실제 크기(수천~수조)를 그대로 기록한다.
-        # (예전처럼 det 기준으로 inf 를 넣으면 로그 그래프에서 그 점이 사라져, 가장 중요한 특이점 구간이 안 보였음)
-        # 완전히 특이(최소 특이값 0)하면 numpy 가 inf 를 돌려준다.
-        try:
-            cond = float(np.linalg.cond(J))  # Jacobian의 최대 특이값 / 최소 특이값
-        except Exception:
-            cond = float('inf')
-            
-        return J, w, cond
-
-    def save_to_csv(self, q, J, w, cond):
+    def save_to_csv(self, q, a, kind):
         # 계산된 모든 데이터를 CSV 파일의 한 줄(ROW)로 기록
         timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
 
         # 본체 6개 관절 각도만 기록
         q_save = list(q[:6])
-    
+
+        idx = a['indices'] or {}
+        extra = [kind, a['sigma_min'], idx.get('wrist', ''), idx.get('elbow', ''), idx.get('shoulder', '')]
+
         # 6x6 Jacobian 행렬을 1차원 리스트로 직렬화(36개의 원소)
-        j_flat = J.flatten().tolist()
-        
-        # 최종 데이터 행 구성: [시간, q1~q6, 가동성, 조건수, J00~J55]
-        row = [timestamp] + q_save + [w, cond] + j_flat
-        
+        j_flat = a['J'].flatten().tolist()
+
+        # 최종 데이터 행 구성: CSV_HEADER 순서
+        row = [timestamp] + q_save + [a['manipulability'], a['condition_number']] + extra + j_flat
+
         with open(self.results_path, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(row)
+            csv.writer(f).writerow(row)
+
+    def publish_ellipsoids(self, q, a):
+        """RViz용 가동성 타원체. 손목 중심에 두 개를 그린다 (plot_ellipsoid.py 와 같은 분해).
+        - ns 'arm':   팔(1~3축) 선속도 타원체 → 팔꿈치·어깨 특이점에서 납작, 빨강
+        - ns 'wrist': 손목(4~6축) 각속도 타원체 → 손목 특이점에서 납작, 빨강
+        손목 중심 링크가 없으면 말단의 선속도 타원체 하나만 그린다."""
+        def pos(link):
+            T = self.robot.fkine(q, end=link)
+            return np.asarray(T.A if hasattr(T, 'A') else T, dtype=float)[:3, 3]
+
+        if self.wrist is not None:
+            center = pos(self.wrist)
+            items = [('arm', a['ellipsoid_arm'], bool({'elbow', 'shoulder'} & set(a['types']))),
+                     ('wrist', a['ellipsoid_wrist'], 'wrist' in a['types'])]
+        else:
+            center = pos(self.end)
+            items = [('linear', a['ellipsoid_linear'], False)]
+
+        msg = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+        for i, (ns, (U, s), singular) in enumerate(items):
+            m = Marker()
+            m.header.frame_id = self.frame_id
+            m.header.stamp = stamp
+            m.ns, m.id = ns, i
+            m.type, m.action = Marker.SPHERE, Marker.ADD
+            m.pose.position.x, m.pose.position.y, m.pose.position.z = (float(v) for v in center)
+            qx, qy, qz, qw = sg.rotation_to_quaternion(U)   # 타원체 축 방향 = U 의 열
+            m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, m.pose.orientation.w = qx, qy, qz, qw
+            # SPHERE 의 scale 은 지름. 너무 얇으면 안 보이므로 최소 5 mm
+            m.scale.x, m.scale.y, m.scale.z = (max(2 * float(r) * ELLIPSOID_SCALE, 0.005) for r in s)
+            m.color.r, m.color.g, m.color.b = (0.9, 0.2, 0.2) if singular else (0.2, 0.8, 0.3)
+            m.color.a = 0.45
+            msg.markers.append(m)
+        self.marker_pub.publish(msg)
 
 def main(args=None):
     # ROS2 노드 실행 및 종료를 관리하는 메인 엔트리 포인트

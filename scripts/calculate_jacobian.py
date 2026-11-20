@@ -5,8 +5,10 @@ import sys
 import numpy as np
 import roboticstoolbox as rtb
 
+import singularity as sg   # 같은 폴더: 특이점 종류·타원체 공통 계산
+
 # Jacobian을 계산할 말단 링크 (m0609_ros_analyzer.py 와 같은 이유로 명시. 자세한 설명은 그 파일의 END_LINK 참고)
-END_LINK = 'link_6'
+END_LINK = sg.END_LINK
 
 
 def load_robot(urdf_path):
@@ -90,6 +92,19 @@ def main():
     print(f"Determinant: {results['determinant']:.6f}")
     print(f"Manipulability Index: {results['manipulability']:.6f}")
     print(f"Condition Number: {results['condition_number']:.2f}")
+
+    # 특이점 종류와 가장 움직이기 어려운 방향 (singularity.py)
+    a = sg.analyze(robot, args.q, end=END_LINK if END_LINK in robot.link_dict else None,
+                   wrist=sg.WRIST_LINK if sg.WRIST_LINK in robot.link_dict else None)
+    if a['indices'] is not None:
+        idx = a['indices']
+        print(f"Singularity indices (0 = singular): wrist={idx['wrist']:.3f}  elbow={idx['elbow']:.3f}  "
+              f"shoulder={idx['shoulder']:.3f}")
+        print(f"Singularity type: {sg.label(a['types'])}")
+    if a['lost_linear'] is not None:
+        print(f"Hardest linear direction (base frame): {np.round(a['lost_linear'], 3).tolist()}")
+    if a['lost_angular'] is not None:
+        print(f"Hardest rotation axis (base frame): {np.round(a['lost_angular'], 3).tolist()}")
 
 
 if __name__ == "__main__":
