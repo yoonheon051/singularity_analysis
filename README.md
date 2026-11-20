@@ -14,7 +14,7 @@ Manipulability / Condition Number 기반으로 Singularity(특이점) 를 분석
 - CSV 로그 저장
 - 분석 결과 시각화
 
-2026.04.24 현재, m0609 6축 로봇팔만 지원하며, m0609의 시뮬레이션(Rviz2)은 https://github.com/yoonheon051/my_robot_description 여기서 확인할 수 있습니다.
+2026.04.24 현재, m0609 6축 로봇팔만 지원합니다. M0609 시뮬레이션(RViz2)용 로봇 모델 패키지 `my_robot_description`도 이 저장소에 함께 들어 있어서, **저장소 하나로 시뮬레이션부터 분석까지** 실행할 수 있습니다. (예전 별도 저장소 [my_robot_description](https://github.com/yoonheon051/my_robot_description)의 내용을 옮겨 왔습니다.)
 
 ## 개발환경
 OS: UBUNTU 22.04.05 LTS
@@ -25,24 +25,57 @@ Language: Python 3.10.12
 
 Key Library: NumPy 1.24.4, Roboticstoolbox-python, PyKDL, pandas·matplotlib(시각화)
 
-설치: `pip install -r requirements.txt`
+## 빠른 시작
+
+```bash
+# 1. 워크스페이스에 받기
+mkdir -p ~/colcon_ws/src && cd ~/colcon_ws/src
+git clone https://github.com/yoonheon051/singularity_analysis.git
+
+# 2. 의존성 설치 (ROS 패키지는 rosdep, Robotics Toolbox 는 pip)
+cd ~/colcon_ws
+rosdep install -i --from-path src --rosdistro humble -y
+pip install -r src/singularity_analysis/requirements.txt
+
+# 3. 빌드
+colcon build --packages-select my_robot_description singularity_analysis
+source install/setup.bash
+
+# 4. 실행: 로봇 모델 + 관절 슬라이더 + RViz(타원체 표시) + 분석 노드
+ros2 launch singularity_analysis analysis.launch.py
+```
+
+관절 슬라이더로 로봇을 움직이면 RViz에 가동성 타원체가 실시간으로 보이고, 결과는 `~/singularity_results/`에 쌓입니다.
+자세한 실행 옵션은 [전체 실행 순서](#전체-실행-순서)를 보세요.
 
 ## 파일 구성
+저장소 하나에 ROS2 패키지 두 개가 들어 있습니다.
+
 ```
-singularity_analysis
-├── .gitignore              # git 제외 목록
-├── README.md               # 프로젝트 메뉴얼
-├── requirements.txt        # 의존성 라이브러리 목록
-├── scripts/                # 실행할 메인 스크립트
-│   ├── singularity.py      # 공통 계산: 가동성 타원체, 특이점 종류 분류 (NumPy만 사용)
-│   ├── calculate_jacobian.py
-│   ├── m0609_ros_analyzer.py 
-│   ├── plot_ellipsoid.py   # 여러 자세의 가동성 타원체 3D 그림
-│   ├── velocity_demo.py    # 특이점 근처 관절 속도 폭주 vs 감쇠 최소제곱(DLS) 시뮬레이션
-│   └── visualize_results.py
-├── docs/                   # README에 넣은 예시 그림
-└── results/                # 분석 결과 이미지나 로그 저장
+singularity_analysis/                  # 저장소 (~/colcon_ws/src 에 clone)
+├── README.md, requirements.txt, docs/ # 설명, pip 의존성, README 예시 그림
+├── my_robot_description/              # [패키지] M0609·RG2 로봇 모델 (ament_cmake)
+│   ├── urdf/                          #   m0609.urdf.xacro (팔만), m0609_rg2.urdf.xacro (RG2 그리퍼 포함)
+│   ├── meshes/                        #   RViz 표시용 3D 모델
+│   ├── launch/rviz_sim.launch.py      #   모델만 띄워 보기
+│   └── rviz/
+└── singularity_analysis/              # [패키지] 특이점 분석 (ament_python)
+    ├── launch/analysis.launch.py      #   시뮬레이션 + 분석 한 번에 실행
+    ├── rviz/analysis.rviz             #   로봇 모델 + 타원체(MarkerArray) 표시 설정
+    ├── singularity_analysis/          #   파이썬 모듈
+    │   ├── singularity.py             #     공통 계산: 타원체, 특이점 종류, URDF 정리 (NumPy만 사용)
+    │   ├── m0609_ros_analyzer.py      #     실시간 분석 노드        (ros2 run ... analyzer)
+    │   ├── calculate_jacobian.py      #     한 자세 분석            (ros2 run ... calculate_jacobian)
+    │   ├── plot_ellipsoid.py          #     자세별 타원체 그림      (ros2 run ... plot_ellipsoid)
+    │   ├── velocity_demo.py           #     속도 폭주 vs DLS       (ros2 run ... velocity_demo)
+    │   └── visualize_results.py       #     CSV 그래프             (ros2 run ... visualize_results)
+    └── test/test_singularity.py       #   ROS·Toolbox 없이 도는 검증 테스트
 ```
+
+결과(CSV·그림)는 `~/singularity_results/`에 저장합니다. 다른 곳에 두려면 환경변수 `SINGULARITY_RESULTS_DIR`을 지정하거나, launch 에서 `results_dir:=경로`를 줍니다.
+
+### 모델 파일 출처
+`my_robot_description/meshes/`의 3D 모델은 두산로보틱스 M0609, OnRobot RG2, Robotiq 그리퍼의 모델 파일입니다. 각 제조사·배포처에 권리가 있으니, 다시 배포할 때는 원래 배포처의 라이선스를 확인하고 출처를 밝혀 주세요. (두 `package.xml`의 라이선스 항목은 아직 `TODO`입니다.)
 
 ## 프로젝트 의도
 
@@ -80,7 +113,7 @@ Jacobian 산출   | calculate_jacobian.py | jacob0(q, end='link_6')로 6x6 행�
 --------------------------------------------------------------------------------
 특이점 종류 분류  |     singularity.py     | det(J) = det(J11)·det(J22) 분해
 --------------------------------------------------------------------------------
-결과 저장        | m0609_ros_analyzer.py | 실행마다 results/analysis_날짜_시각.csv 로 기록
+결과 저장        | m0609_ros_analyzer.py | 실행마다 ~/singularity_results/analysis_날짜_시각.csv
 --------------------------------------------------------------------------------
 지표 토픽        | m0609_ros_analyzer.py | /singularity/* (rqt_plot 실시간 그래프)
 --------------------------------------------------------------------------------
@@ -184,7 +217,7 @@ $$\det J = \det J_{11} \cdot \det J_{22}$$
 | 어깨 (shoulder) | $c_1 \cdot n = 0$ | $\lvert c_1 \cdot n \rvert$ / 팔 길이(0.779 m) | 0.05 | 손목 중심이 1번 축 쪽으로 옴 → 1번 관절이 새 방향을 못 만들어 옆으로 못 움직임 |
 
 임계값은 my_robot_description의 M0609 URDF로 각도를 바꿔 가며 정했습니다(`singularity.py`의 `*_LIMIT`).
-수치 확인 결과, 여러 자세에서 $\det J$ 와 $\det J_{11} \cdot \det J_{22}$ 가 출력한 모든 자릿수까지 같았습니다.
+수치 확인 결과 $\det J$ 와 $\det J_{11} \cdot \det J_{22}$ 는 $q_4 = 0$ 인 자세에서 완전히 같고, 일반 자세에서는 상대 오차 $10^{-4}$ 수준으로 같습니다. URDF에 90° 회전이 `1.571`(π/2의 근사)로 적혀 있어 손목 세 축이 약 0.03 mm 어긋나기 때문입니다(실제 로봇도 조립 오차가 있어 완벽한 구형 손목은 아닙니다).
 
 계산은 `singularity.py`에 있고, Toolbox로 `jacob0(q, end='link_6')`(말단)과 `jacob0(q, end='link_5')`(손목 중심) 두 Jacobian만 있으면 됩니다.
 `link_5`가 없는 URDF에서는 종류 분류를 건너뛰고 경고를 띄웁니다.
@@ -253,16 +286,14 @@ cond = np.linalg.cond(J)
 
 6. 실행 방법
 
-M0609 URDF 파일 경로를 인자로 줍니다(생략하면 현재 폴더의 `m0609.urdf`).
-[my_robot_description](https://github.com/yoonheon051/my_robot_description)의 `urdf/m0609.urdf.xacro`는 xacro 매크로가 없는 일반 URDF라 그대로 써도 되고, `xacro`로 변환해도 됩니다.
+URDF 경로를 생략하면 `my_robot_description` 패키지의 `urdf/m0609.urdf.xacro`를 씁니다. 다른 URDF/xacro 파일은 경로로 줍니다.
 
 ```
-cd ~/singularity_analysis
-
-ros2 run xacro xacro ~/colcon_ws/src/my_robot_description/urdf/m0609.urdf.xacro > m0609.urdf
-python3 scripts/calculate_jacobian.py m0609.urdf
-python3 scripts/calculate_jacobian.py m0609.urdf --q 0 -0.3 1.2 0 1.0 0   # 다른 자세
+ros2 run singularity_analysis calculate_jacobian
+ros2 run singularity_analysis calculate_jacobian --q 0 -0.3 1.2 0 1.0 0   # 다른 자세
+ros2 run singularity_analysis calculate_jacobian 다른로봇.urdf
 ```
+빌드하지 않고 저장소에서 바로 실행해도 됩니다: `python3 singularity_analysis/singularity_analysis/calculate_jacobian.py`
 
 7. 실행 예시 (기본 자세, my_robot_description의 m0609 URDF 기준)
 
@@ -353,7 +384,7 @@ ros2 topic echo /singularity/type
 7. CSV 자동 저장
 
 ```
-results/analysis_20261120_153000.csv   (실행할 때마다 새 파일)
+~/singularity_results/analysis_20261120_153000.csv   (실행할 때마다 새 파일)
 ```
 
 다음 데이터를 저장:
@@ -413,7 +444,7 @@ ax1.axhline(y=0.01)
 5. 실행 방법
 
 ```
-python3 scripts/visualize_results.py
+ros2 run singularity_analysis visualize_results
 ```
 
 6. 출력 결과 (CSV 옆에 `analysis_날짜_시각_plot.png`로도 저장)
@@ -430,90 +461,94 @@ python3 scripts/visualize_results.py
 여러 자세의 가동성 타원체를 3D로 나란히 그립니다. ROS 없이 URDF만 있으면 됩니다.
 
 ```
-python3 scripts/plot_ellipsoid.py m0609.urdf                         # 기본 4자세: 정상·손목·팔꿈치·어깨 특이점 근처
-python3 scripts/plot_ellipsoid.py m0609.urdf --q 0 -0.3 1.2 0 1 0 --q 0 0 0 0 0 0   # 원하는 자세 여러 개
+ros2 run singularity_analysis plot_ellipsoid                         # 기본 4자세: 정상·손목·팔꿈치·어깨 특이점 근처
+ros2 run singularity_analysis plot_ellipsoid --q 0 -0.3 1.2 0 1 0 --q 0 0 0 0 0 0   # 원하는 자세 여러 개
 ```
 - 윗줄: ARM 타원체, 아랫줄: WRIST 타원체 ([왜 둘로 나누나](#왜-타원체를-둘로-나누어-그리나))
 - 빨간 화살표: 가장 움직이기 어려운 방향(가장 짧은 축)
-- 결과: `results/manipulability_ellipsoids.png`
+- 결과: `~/singularity_results/manipulability_ellipsoids.png`
 
 ### velocity_demo.py
 특이점을 지나가는 직선 경로에서 역행렬 / 역행렬 + 속도 제한 / DLS의 관절 속도와 경로 오차를 비교합니다([설명](#속도-명령-폭주와-감쇠-최소제곱-dls)).
 
 ```
-python3 scripts/velocity_demo.py m0609.urdf
-python3 scripts/velocity_demo.py m0609.urdf --eps 0.1 --lam 0.15   # 감쇠를 키워 정확도와의 균형 비교
+ros2 run singularity_analysis velocity_demo
+ros2 run singularity_analysis velocity_demo --eps 0.1 --lam 0.15   # 감쇠를 키워 정확도와의 균형 비교
 ```
 - 터미널: 방법별 최대 관절 속도·위치 오차·자세 오차 표
-- 결과: `results/velocity_dls_demo.png` (관절 속도, 경로 오차, 최소 특이값과 λ, 손목 관절 각도)
+- 결과: `~/singularity_results/velocity_dls_demo.png` (관절 속도, 경로 오차, 최소 특이값과 λ, 손목 관절 각도)
 
 ## 전체 실행 순서
 
-### 1. ROS2 환경 Source
+### 1. 설치·빌드 (처음 한 번)
 
-```
+```bash
 source /opt/ros/humble/setup.bash
-```
-
-### 2. 워크스페이스 Build
-
-```
+mkdir -p ~/colcon_ws/src && cd ~/colcon_ws/src
+git clone https://github.com/yoonheon051/singularity_analysis.git
 cd ~/colcon_ws
-
-colcon build
-
+rosdep install -i --from-path src --rosdistro humble -y
+pip install -r src/singularity_analysis/requirements.txt
+colcon build --packages-select my_robot_description singularity_analysis
 source install/setup.bash
 ```
+코드를 고친 뒤에는 `colcon build --packages-select singularity_analysis --symlink-install`로 다시 빌드합니다(`--symlink-install`이면 이후 파이썬 수정은 다시 빌드하지 않아도 반영됩니다).
 
-### 3. 로봇 시뮬레이터 실행
+### 2. 시뮬레이션 + 분석 실행
 
-M0609 URDF 및 /joint_states 발행 필요
-
-예시 : 
-
-```
-ros2 launch my_robot_description rviz_sim.launch.py
+```bash
+ros2 launch singularity_analysis analysis.launch.py
 ```
 
-m0609 RViz2 시뮬레이션: https://github.com/yoonheon051/my_robot_description
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| `model:=` | `m0609_rg2` | 로봇 모델. `m0609`(그리퍼 없음) 또는 `m0609_rg2`(RG2 그리퍼 포함) |
+| `gui:=` | `true` | 관절 슬라이더 창. 실제 로봇의 `/joint_states`를 쓸 때는 `false` |
+| `rviz:=` | `true` | RViz (로봇 모델 + 가동성 타원체) |
+| `results_dir:=` | `~/singularity_results` | CSV 저장 폴더 |
 
-### 4. 특이점 분석 노드 실행
+그리퍼 모델이어도 분석은 팔 6축(base_link → link_6)만 대상으로 하고, 관절값은 이름(`joint_1`~`joint_6`)으로 찾습니다.
+로봇 모델만 보려면 `ros2 launch my_robot_description rviz_sim.launch.py`도 그대로 쓸 수 있습니다.
 
-새 터미널: 
+### 3. 로봇 움직이기
 
-```
-cd ~/singularity_analysis
+관절 슬라이더 창(또는 실제 로봇)에서 관절 값을 바꿉니다. 특이점 근처에 들어가면 터미널에 경고가 뜨고, RViz의 타원체가 납작해지며 빨갛게 바뀝니다.
 
-python3 scripts/m0609_ros_analyzer.py
-```
-
-### 5. 로봇 움직이기
-
-Rviz2 또는 실제 로봇에서 Joint 값 변화
-
-### 6. CSV 결과 확인
+### 4. CSV 결과 확인
 
 ```
-results/analysis_날짜_시각.csv   (노드 시작 시 터미널에 경로가 찍힘)
+~/singularity_results/analysis_날짜_시각.csv   (노드 시작 시 터미널에 경로가 찍힘)
 ```
 
-### 7. 결과 시각화
+### 5. 결과 시각화
 
+```bash
+ros2 run singularity_analysis visualize_results
 ```
-python3 scripts/visualize_results.py
+인자 없이 실행하면 결과 폴더에서 **가장 최근 실행의 CSV**를 그립니다. 그래프는 화면에 띄우고 CSV 옆에 `..._plot.png`로도 저장합니다. 다른 실행을 보려면 경로를 줍니다(`ros2 run singularity_analysis visualize_results ~/singularity_results/analysis_20261120_153000.csv`).
+
+### 6. (선택) 지표 실시간 그래프
+
+```bash
+ros2 run rqt_plot rqt_plot /singularity/manipulability/data /singularity/sigma_min/data
 ```
-인자 없이 실행하면 `results/`에서 **가장 최근 실행의 CSV**를 그립니다. 그래프는 화면에 띄우고 CSV 옆에 `..._plot.png`로도 저장합니다. 다른 실행을 보려면 경로를 줍니다(`python3 scripts/visualize_results.py results/analysis_20261120_153000.csv`).
 
-### 8. (선택) RViz 타원체 / 자세별 타원체 그림
+### 7. (선택) ROS 없이 하는 분석
 
-- 노드가 켜져 있는 동안 RViz에서 **Add → By topic → `/manipulability_ellipsoid`** 를 추가하면 로봇을 움직일 때 타원체가 실시간으로 변합니다.
-- ROS 없이 자세별 그림만 보려면: `python3 scripts/plot_ellipsoid.py m0609.urdf`
-- 지표 실시간 그래프: `ros2 run rqt_plot rqt_plot /singularity/manipulability/data`
-
-### 9. (선택) 속도 폭주 vs DLS 시뮬레이션
-
+```bash
+ros2 run singularity_analysis plot_ellipsoid      # 자세별 타원체 그림
+ros2 run singularity_analysis velocity_demo       # 속도 폭주 vs DLS
+ros2 run singularity_analysis calculate_jacobian  # 한 자세 분석
 ```
-python3 scripts/velocity_demo.py m0609.urdf
+빌드하지 않고 `python3 singularity_analysis/singularity_analysis/plot_ellipsoid.py`처럼 파일을 바로 실행해도 됩니다.
+
+### 8. 테스트
+
+Robotics Toolbox·ROS 없이도 도는 테스트입니다. 같은 M0609 URDF로 직접 만든 NumPy 기구학으로 URDF 정리(그리퍼·미믹 관절 제거), Jacobian, 행렬식 분해, 특이점 분류, 타원체, DLS 결과를 확인합니다.
+
+```bash
+colcon test --packages-select singularity_analysis && colcon test-result --verbose
+# 또는 저장소에서 바로: cd singularity_analysis && python3 -m pytest test/
 ```
 
 ## 분석 흐름
@@ -522,15 +557,15 @@ python3 scripts/velocity_demo.py m0609.urdf
 
 ```mermaid
 flowchart LR
-    SIM["RViz2 시뮬레이션<br/>my_robot_description"] -- "/robot_description (URDF)" --> AN["m0609_ros_analyzer.py"]
+    SIM["analysis.launch.py<br/>robot_state_publisher · 관절 슬라이더<br/>(my_robot_description 모델)"] -- "/robot_description (URDF)" --> AN["m0609_ros_analyzer.py<br/>팔 6축만 남겨 모델 생성"]
     SIM -- "/joint_states" --> AN
     REAL["실제 로봇 (선택)"] -. "/joint_states" .-> AN
-    AN -- "행마다 기록" --> CSV[("results/analysis_날짜_시각.csv")]
+    AN -- "행마다 기록" --> CSV[("~/singularity_results/<br/>analysis_날짜_시각.csv")]
     AN -- "/singularity/* 토픽" --> RQT["rqt_plot"]
     URDF --> VD["velocity_demo.py<br/>속도 폭주 vs DLS"]
     CSV --> VIS["visualize_results.py"]
-    VIS --> PNG[("results/analysis_날짜_시각_plot.png")]
-    URDF[("m0609.urdf")] --> CJ["calculate_jacobian.py<br/>한 자세만 계산"]
+    VIS --> PNG[("..._plot.png")]
+    URDF[("m0609.urdf.xacro")] --> CJ["calculate_jacobian.py<br/>한 자세만 계산"]
 ```
 
 ### 실시간 분석 노드 (`m0609_ros_analyzer.py`)
@@ -538,12 +573,12 @@ flowchart LR
 ```mermaid
 flowchart TD
     A(["노드 시작"]) --> C["/robot_description 대기<br/>Transient Local로 늦게 켜도 받음"]
-    C --> D["URDF → 로봇 모델<br/>rtb.ERobot.URDF"]
+    C --> D["URDF에서 팔 사슬(base_link → link_6)만 남김<br/>→ rtb.ERobot.URDF"]
     D --> E{"모델 생성 성공?"}
     E -- 예 --> B["이번 실행용 CSV 열기<br/>analysis_날짜_시각.csv, 1초마다 flush"]
     E -- 아니요 --> X(["오류로 종료"])
     B --> F[["/joint_states 수신할 때마다"]]
-    F --> G["이름으로 joint_1 ~ joint_6 각도 q 추출"]
+    F --> G["이름으로 joint_1 ~ joint_6 각도 q 추출<br/>그리퍼 관절·순서와 무관"]
     G --> H{"6개 모두 있음?"}
     H -- 아니요 --> W["건너뜀<br/>처음 한 번만 이름 불일치 경고"]
     H -- 예 --> J["Jacobian J = jacob0(q, end=link_6)<br/>6x6"]

@@ -17,8 +17,17 @@
    - 손목 특이점 (wrist):     det[z4 z5 z6] = 0      → 4번·6번 축이 일직선 (q5 ≈ 0)
    - 팔꿈치 특이점 (elbow):   |c2 × c3| = 0          → 팔이 완전히 펴지거나 접힘
    - 어깨 특이점 (shoulder):  c1 · n = 0             → 손목 중심이 1번 축 쪽으로 와서 1번 관절이 새 방향을 못 만듦
+
+3) URDF 정리·경로 도우미 (ROS·Toolbox 없이 동작)
+   - arm_only_urdf: 그리퍼 등 곁가지를 떼고 base_link → link_6 팔 사슬만 남김
+   - default_urdf / results_dir: 기본 URDF 위치, 결과 저장 폴더
 """
+import os
+import xml.etree.ElementTree as ET
+
 import numpy as np
+
+JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']   # M0609 URDF의 관절 이름
 
 # 손목 중심 링크: M0609 URDF에서 joint_4·joint_5 원점이 같은 점(손목 중심)이고 link_5 원점이 그 점
 WRIST_LINK = 'link_5'
@@ -131,3 +140,84 @@ def rotation_to_quaternion(R):
         return ((R[0, 1] + R[1, 0]) / s, 0.25 * s, (R[1, 2] + R[2, 1]) / s, (R[0, 2] - R[2, 0]) / s)
     s = np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2
     return ((R[0, 2] + R[2, 0]) / s, (R[1, 2] + R[2, 1]) / s, 0.25 * s, (R[1, 0] - R[0, 1]) / s)
+
+
+# ---------------------------------------------------------------------------------------------
+# URDF 정리·경로 도우미
+# ---------------------------------------------------------------------------------------------
+
+def arm_only_urdf(urdf_xml, end_link=END_LINK):
+    """
+    URDF 문자열에서 루트 링크부터 end_link 까지의 사슬만 남긴 URDF 문자열을 돌려준다.
+    - RG2 그리퍼처럼 말단 뒤에 붙은 관절(미믹 관절 포함)과, 'base' 같은 곁가지 링크를 뗀다.
+      → Toolbox 모델이 항상 팔 6축만 갖게 되어, 관절 순서·개수가 URDF 종류(그리퍼 유무)와 상관없이 같다.
+    - visual/collision 은 지운다: 기구학 계산에는 필요 없고, package:// 메시 경로를 찾다가 실패하는 일을 막는다.
+    end_link 가 없으면 ValueError.
+    """
+    root = ET.fromstring(urdf_xml)
+    joints = {j.find('child').get('link'): j for j in root.findall('joint')}
+    links = {l.get('name'): l for l in root.findall('link')}
+    if end_link not in links:
+        raise ValueError(f"URDF 에 '{end_link}' 링크가 없습니다")
+
+    keep_links, keep_joints, link = {end_link}, [], end_link
+    while link in joints:                      # 말단에서 부모 쪽으로 거슬러 올라감
+        joint = joints[link]
+        keep_joints.append(joint)
+        link = joint.find('parent').get('link')
+        keep_links.add(link)
+
+    robot = ET.Element('robot', {'name': root.get('name', 'robot')})
+    for name, el in links.items():
+        if name in keep_links:
+            for tag in ('visual', 'collision'):
+                for child in el.findall(tag):
+                    el.remove(child)
+            robot.append(el)
+    for joint in reversed(keep_joints):
+        robot.append(joint)
+    return ET.tostring(robot, encoding='unicode')
+
+
+def root_link(urdf_xml):
+    """URDF 의 루트(부모가 없는) 링크 이름. RViz 마커의 frame_id 로 쓴다."""
+    root = ET.fromstring(urdf_xml)
+    children = {j.find('child').get('link') for j in root.findall('joint')}
+    for link in root.findall('link'):
+        if link.get('name') not in children:
+            return link.get('name')
+    return 'base_link'
+
+
+def read_urdf(path):
+    """URDF 또는 xacro 파일 → URDF 문자열. xacro 는 ROS 의 xacro 모듈이 있으면 처리하고,
+    없으면 그대로 읽는다 (m0609.urdf.xacro 는 매크로가 없는 일반 URDF라 그대로 써도 됨)."""
+    if path.endswith('.xacro'):
+        try:
+            import xacro
+            return xacro.process_file(path).toxml()
+        except ImportError:
+            pass
+    with open(path, encoding='utf-8') as f:
+        return f.read()
+
+
+def default_urdf():
+    """기본 M0609 URDF 위치: 설치된 my_robot_description 패키지 → 이 저장소의 my_robot_description 폴더"""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        path = os.path.join(get_package_share_directory('my_robot_description'), 'urdf', 'm0609.urdf.xacro')
+        if os.path.isfile(path):
+            return path
+    except Exception:   # ROS 가 없거나 패키지를 아직 빌드하지 않음
+        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(here, '..', '..', 'my_robot_description', 'urdf', 'm0609.urdf.xacro'))
+
+
+def results_dir():
+    """결과(CSV·그림) 저장 폴더: 환경변수 SINGULARITY_RESULTS_DIR, 없으면 ~/singularity_results.
+    colcon 으로 설치하면 코드가 install/ 아래로 복사돼 저장소 위치를 알 수 없으므로 고정 위치를 쓴다."""
+    path = os.path.expanduser(os.environ.get('SINGULARITY_RESULTS_DIR', '~/singularity_results'))
+    os.makedirs(path, exist_ok=True)
+    return path

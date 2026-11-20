@@ -4,7 +4,10 @@ import matplotlib.pyplot as plt
 import os
 import sys
 
-import singularity as sg   # 같은 폴더: 특이점 종류 임계값
+try:                                  # ros2 run / 패키지로 설치했을 때
+    from . import singularity as sg
+except ImportError:                   # python3 파일경로로 직접 실행할 때
+    import singularity as sg   # 같은 폴더: 특이점 종류 임계값
 
 """
 [ 로봇 기구학 성능 지표 시각화 가이드 ]
@@ -140,12 +143,14 @@ def latest_csv(results_dir):
     return max(files, key=os.path.getmtime) if files else os.path.join(results_dir, 'analysis_log.csv')
 
 
-# 파이썬 스크립트 실행 엔트리 포인트
-if __name__ == "__main__":
-
-    # 인자가 없으면 저장소 results/ 폴더에서 가장 최근 실행의 CSV 를 그림
-    # 다른 파일을 보려면 인자로 경로를 준다: python3 scripts/visualize_results.py results/analysis_20261120_153000.csv
-    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    csv_file = sys.argv[1] if len(sys.argv) > 1 else latest_csv(os.path.join(repo_dir, 'results'))
+def main():
+    # 인자가 없으면 결과 폴더(~/singularity_results 또는 SINGULARITY_RESULTS_DIR)에서 가장 최근 실행의 CSV 를 그림
+    # 다른 파일을 보려면 인자로 경로를 준다: visualize_results ~/singularity_results/analysis_20261120_153000.csv
+    csv_file = sys.argv[1] if len(sys.argv) > 1 else latest_csv(sg.results_dir())
     print(f"그릴 파일: {csv_file}")
     plot_singularity_metrics(csv_file)
+
+
+# 파이썬 스크립트 실행 엔트리 포인트
+if __name__ == "__main__":
+    main()

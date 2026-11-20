@@ -11,9 +11,9 @@ M0609는 4·5·6축이 한 점(손목 중심)에서 만나므로 det(J) = det(J1
  그래서 특이점 종류를 보여 주기에는 나눈 타원체가 더 정확하다)
 
 사용:
-    python3 scripts/plot_ellipsoid.py m0609.urdf                       # 기본 4자세(정상·손목·팔꿈치·어깨 특이점 근처)
-    python3 scripts/plot_ellipsoid.py m0609.urdf --q 0 -0.3 1.2 0 1 0  # 원하는 자세 (여러 번 줄 수 있음)
-결과: results/manipulability_ellipsoids.png
+    ros2 run singularity_analysis plot_ellipsoid                       # 기본 4자세(정상·손목·팔꿈치·어깨 특이점 근처)
+    ros2 run singularity_analysis plot_ellipsoid --q 0 -0.3 1.2 0 1 0  # 원하는 자세 (여러 번 줄 수 있음)
+결과: ~/singularity_results/manipulability_ellipsoids.png (SINGULARITY_RESULTS_DIR 로 변경 가능)
 """
 import argparse
 import os
@@ -21,10 +21,13 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-import singularity as sg
-from calculate_jacobian import load_robot
+try:                                  # ros2 run / 패키지로 설치했을 때
+    from . import singularity as sg
+    from .calculate_jacobian import load_robot
+except ImportError:                   # python3 파일경로로 직접 실행할 때
+    import singularity as sg
+    from calculate_jacobian import load_robot
 
-REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LINKS = ['base_link', 'link_1', 'link_2', 'link_3', 'link_4', 'link_5', 'link_6']
 
 # 기본 자세: (제목, 관절 각도 rad). 특이점 '근처'라 타원체가 납작하지만 완전히 0은 아님
@@ -89,13 +92,13 @@ def draw_pose(ax_lin, ax_ang, robot, title, q):
 
 def main():
     ap = argparse.ArgumentParser(description="가동성 타원체 시각화")
-    ap.add_argument("urdf", nargs="?", default="m0609.urdf")
+    ap.add_argument("urdf", nargs="?", default=None, help="M0609 URDF/xacro (생략하면 my_robot_description 의 m0609.urdf.xacro)")
     ap.add_argument("--q", nargs=6, type=float, action="append", metavar="Q",
                     help="관절 각도 6개(rad). 여러 번 주면 여러 자세를 그림")
     ap.add_argument("--no-show", action="store_true", help="화면에 띄우지 않고 파일만 저장")
     args = ap.parse_args()
 
-    robot = load_robot(args.urdf)
+    robot = load_robot(args.urdf or sg.default_urdf())
     poses = [(f"q = {np.round(q, 2).tolist()}", q) for q in args.q] if args.q else DEFAULT_POSES
 
     # 자세마다 한 열: 윗줄 선속도, 아랫줄 각속도
@@ -113,8 +116,7 @@ def main():
                  'bottom: wrist joints 4-6 angular velocity, red arrow: hardest direction', fontsize=12)
     plt.tight_layout()
 
-    out = os.path.join(REPO_DIR, 'results', 'manipulability_ellipsoids.png')
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    out = os.path.join(sg.results_dir(), 'manipulability_ellipsoids.png')
     plt.savefig(out, dpi=150)
     print(f"그래프 저장: {out}")
     if not args.no_show:

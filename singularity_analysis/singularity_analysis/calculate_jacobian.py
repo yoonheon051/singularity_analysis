@@ -1,29 +1,46 @@
 import argparse
 import os
 import sys
+import tempfile
 
 import numpy as np
-import roboticstoolbox as rtb
 
-import singularity as sg   # 같은 폴더: 특이점 종류·타원체 공통 계산
+try:                                  # ros2 run / 패키지로 설치했을 때
+    from . import singularity as sg
+except ImportError:                   # python3 파일경로로 직접 실행할 때
+    import singularity as sg
 
-# Jacobian을 계산할 말단 링크 (m0609_ros_analyzer.py 와 같은 이유로 명시. 자세한 설명은 그 파일의 END_LINK 참고)
+# Jacobian을 계산할 말단 링크 (특이점 분석 대상인 팔 끝, 자세한 설명은 README '말단 링크를 link_6으로 지정하는 이유')
 END_LINK = sg.END_LINK
+
+
+def load_robot_from_xml(urdf_xml):
+    """
+    URDF 문자열 → Robotics Toolbox 로봇 모델 (팔 6축만)
+    그리퍼·곁가지 링크를 떼고(base_link → link_6) 불러오므로, 그리퍼가 달린 URDF(m0609_rg2)를 줘도 항상 6축 모델이 된다.
+    """
+    import roboticstoolbox as rtb   # 무거운 라이브러리라 실제로 모델을 만들 때만 불러옴 (테스트는 없이도 돌아감)
+    arm_xml = sg.arm_only_urdf(urdf_xml, END_LINK)
+    # Toolbox 는 파일 경로로만 읽으므로 임시 파일에 써서 넘김
+    with tempfile.NamedTemporaryFile('w', suffix='.urdf', delete=False, encoding='utf-8') as tmp:
+        tmp.write(arm_xml)
+        path = tmp.name
+    try:
+        # (rtb.models.URDF 는 모델 모음 모듈이라 호출할 수 없다. 파일을 읽는 함수는 ERobot.URDF)
+        return rtb.ERobot.URDF(path)
+    finally:
+        os.remove(path)
 
 
 def load_robot(urdf_path):
     """
     1. 분석 대상 로봇 모델(m0609) 로드
-    URDF 파일에는 로봇의 링크 길이, 질량, 관절 회전축 등 물리적/기구학적 정보가 포함됨
+    URDF(또는 xacro) 파일에는 로봇의 링크 길이, 질량, 관절 회전축 등 물리적/기구학적 정보가 포함됨
     """
     if not os.path.isfile(urdf_path):
         sys.exit(f"URDF 파일을 찾을 수 없습니다: {urdf_path}\n"
-                 "my_robot_description 의 urdf/m0609.urdf.xacro 를 xacro 로 변환해 경로를 넘겨 주세요.\n"
-                 "  예) ros2 run xacro xacro m0609.urdf.xacro > m0609.urdf\n"
-                 "      python3 scripts/calculate_jacobian.py m0609.urdf")
-    # URDF 파일에서 기구학 트리 구조를 읽어와 수학적 객체로 생성
-    # (rtb.models.URDF 는 모델 모음 모듈이라 호출할 수 없다. 파일을 읽는 함수는 ERobot.URDF)
-    return rtb.ERobot.URDF(urdf_path)
+                 "경로를 생략하면 my_robot_description 패키지의 urdf/m0609.urdf.xacro 를 씁니다.")
+    return load_robot_from_xml(sg.read_urdf(urdf_path))
 
 
 def analyze_m0609_kinematics(robot, joint_angles):
@@ -77,13 +94,14 @@ def main():
     # 설명: 6축 로봇에서 4번 관절과 6번 관절의 회전축이 일직선이 될 때(보통 q5=0) 발생
     # =========================================================================
     ap = argparse.ArgumentParser(description="M0609 한 자세의 Jacobian·특이점 지표 계산")
-    ap.add_argument("urdf", nargs="?", default="m0609.urdf", help="M0609 URDF 파일 경로 (기본: 현재 폴더의 m0609.urdf)")
+    ap.add_argument("urdf", nargs="?", default=None,
+                    help="M0609 URDF/xacro 파일 경로 (생략하면 my_robot_description 의 m0609.urdf.xacro)")
     ap.add_argument("--q", nargs=6, type=float, metavar=("Q1", "Q2", "Q3", "Q4", "Q5", "Q6"),
                     default=[0, 0, np.pi / 2, 0, 0.01, 0],
                     help="관절 각도(rad). 기본값은 q5≈0 인 손목 특이점 근처 자세")
     args = ap.parse_args()
 
-    robot = load_robot(args.urdf)
+    robot = load_robot(args.urdf or sg.default_urdf())
     results = analyze_m0609_kinematics(robot, args.q)
 
     # 결과 출력 (소수점 셋째자리까지 반올림)

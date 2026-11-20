@@ -14,9 +14,9 @@
    → 특이점 근처에서 '못 움직이는 방향'의 속도를 조금 포기하는 대신 관절 속도를 작게 유지
 
 사용:
-    python3 scripts/velocity_demo.py m0609.urdf
-    python3 scripts/velocity_demo.py m0609.urdf --eps 0.08 --lam 0.08     # 감쇠를 더 크게
-결과: results/velocity_dls_demo.png
+    ros2 run singularity_analysis velocity_demo
+    ros2 run singularity_analysis velocity_demo --eps 0.08 --lam 0.08     # 감쇠를 더 크게
+결과: ~/singularity_results/velocity_dls_demo.png (SINGULARITY_RESULTS_DIR 로 변경 가능)
 """
 import argparse
 import os
@@ -24,10 +24,13 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-import singularity as sg
-from calculate_jacobian import load_robot
+try:                                  # ros2 run / 패키지로 설치했을 때
+    from . import singularity as sg
+    from .calculate_jacobian import load_robot
+except ImportError:                   # python3 파일경로로 직접 실행할 때
+    import singularity as sg
+    from calculate_jacobian import load_robot
 
-REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 Q_START = [0, -0.3, 1.2, 0, 0.3, 0]   # 시작 자세 (q5 = 0.3 rad)
 DISTANCE = 0.25                       # 아래로 이동할 거리 (m)
@@ -97,13 +100,13 @@ def simulate(robot, method, eps, lam_max):
 
 def main():
     ap = argparse.ArgumentParser(description="특이점 근처 관절 속도 폭주 vs 감쇠 최소제곱(DLS)")
-    ap.add_argument("urdf", nargs="?", default="m0609.urdf")
+    ap.add_argument("urdf", nargs="?", default=None, help="M0609 URDF/xacro (생략하면 my_robot_description 의 m0609.urdf.xacro)")
     ap.add_argument("--eps", type=float, default=0.05, help="DLS 를 켜는 최소 특이값 기준 ε (기본 0.05)")
     ap.add_argument("--lam", type=float, default=0.05, help="최대 감쇠 계수 λmax (기본 0.05)")
     ap.add_argument("--no-show", action="store_true", help="화면에 띄우지 않고 파일만 저장")
     args = ap.parse_args()
 
-    robot = load_robot(args.urdf)
+    robot = load_robot(args.urdf or sg.default_urdf())
     runs = {
         'Inverse  J^-1': ('inverse', 'tab:red'),
         f'Inverse + speed limit ({JOINT_SPEED_LIMIT} rad/s)': ('inverse_limited', 'tab:orange'),
@@ -153,8 +156,7 @@ def main():
         ax.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
 
-    out = os.path.join(REPO_DIR, 'results', 'velocity_dls_demo.png')
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    out = os.path.join(sg.results_dir(), 'velocity_dls_demo.png')
     plt.savefig(out, dpi=130)
     print(f"그래프 저장: {out}")
     if not args.no_show:

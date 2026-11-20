@@ -4,19 +4,19 @@ from std_msgs.msg import String, Float64
 from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from visualization_msgs.msg import Marker, MarkerArray
-import roboticstoolbox as rtb
 import numpy as np
 import csv
 import os
-import tempfile
 from datetime import datetime
 
-import singularity as sg   # 같은 폴더의 공통 계산 (타원체, 특이점 종류)
+try:                                  # ros2 run / launch 로 실행할 때 (패키지)
+    from . import singularity as sg   # 공통 계산 (타원체, 특이점 종류, URDF 정리)
+    from .calculate_jacobian import load_robot_from_xml
+except ImportError:                   # python3 파일경로로 직접 실행할 때
+    import singularity as sg
+    from calculate_jacobian import load_robot_from_xml
 
-# 결과 폴더: 실행 위치(현재 폴더)와 상관없이 항상 저장소의 results/ 에 저장
-REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RESULTS_DIR = os.path.join(REPO_DIR, 'results')
-JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']   # M0609 URDF의 관절 이름
+JOINT_NAMES = sg.JOINT_NAMES   # M0609 URDF의 관절 이름 (joint_1 ~ joint_6)
 # Jacobian을 계산할 말단 링크. M0609 URDF에는 끝이 열린 링크가 두 개(높이 표시용 'base', 말단 'tool0') 있어서,
 # 지정하지 않으면 Toolbox가 그중 첫 번째(=base)를 말단으로 골라 엉뚱한 Jacobian이 나올 수 있다.
 # link_6 은 tool0 과 원점이 같아 jacob0 결과가 같고, 그리퍼가 달린 URDF에도 항상 있다.
@@ -47,82 +47,54 @@ class M0609SingularityMonitor(Node):
     def __init__(self):
         # ROS2 노드 이름 초기화
         super().__init__('m0609_singularity_monitor')
-        
+
         # 1. 데이터 저장 설정
-        # 실행할 때마다 새 파일(results/analysis_날짜_시각.csv)에 기록 → 실행끼리 섞이지 않고 비교하기 쉬움
-        os.makedirs(RESULTS_DIR, exist_ok=True)
-        self.results_path = os.path.join(RESULTS_DIR, datetime.now().strftime('analysis_%Y%m%d_%H%M%S.csv'))
+        # 실행할 때마다 새 파일(analysis_날짜_시각.csv)에 기록 → 실행끼리 섞이지 않고 비교하기 쉬움
+        # 저장 폴더: 파라미터 results_dir (기본: 환경변수 SINGULARITY_RESULTS_DIR 또는 ~/singularity_results)
+        results_dir = self.declare_parameter('results_dir', sg.results_dir()).value
+        results_dir = os.path.expanduser(results_dir)
+        os.makedirs(results_dir, exist_ok=True)
+        self.results_path = os.path.join(results_dir, datetime.now().strftime('analysis_%Y%m%d_%H%M%S.csv'))
         self.csv_file = None   # 모델을 만든 뒤에 연다 (실패하면 빈 파일이 남지 않게)
         self._missing_warned = False   # 관절 이름이 안 맞을 때 경고를 한 번만 출력
         self._last_type = 'normal'     # 특이점 종류가 바뀔 때만 알리기 위함
-
 
         # 2. 로봇 모델 정보(URDF) 수신을 위한 설정
         # Transient Local: 노드가 늦게 켜져도 이전에 발행된 토픽 데이터를 받아올 수 있도록 설정(Latch 방식)
         self.get_logger().info('URDF 데이터를 /robot_description 토픽에서 기다리는 중...')
         qos_profile = QoSProfile(depth=1)
         qos_profile.durability = DurabilityPolicy.TRANSIENT_LOCAL
-        
+
         self.urdf_xml = None
         # /robot_description 토픽을 통해 로봇의 구조 정보(URDF)를 수신
         self.subscription = self.create_subscription(String, '/robot_description', self.urdf_callback, qos_profile)
-        
+
         # URDF 데이터를 수신할 때까지 노드 실행을 잠시 대기(모델이 있어야 계산 가능)
         while self.urdf_xml is None:
             rclpy.spin_once(self)
 
-        # 3. 수신된 URDF를 기반으로 수학적 로봇 모델 생성    
+        # 3. 수신된 URDF를 기반으로 수학적 로봇 모델 생성
+        # 그리퍼(RG2)가 달린 URDF여도 base_link → link_6 팔 사슬만 남겨서 만든다 (calculate_jacobian.load_robot_from_xml)
+        # → 모델은 항상 6축이고, 관절값은 이름(joint_1~6)으로 찾으므로 /joint_states 의 순서·그리퍼 관절과 무관
         try:
-            # 수신된 XML 문자열을 파일 형태로 저장해야 Toolbox에서 로드 가능(임시 파일 활용)
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.urdf', delete=False) as tmp:
-                tmp.write(self.urdf_xml)
-                tmp_path = tmp.name
-
-            # 기본 방식: Toolbox의 표준 URDF 로더 사용 시도
-            try:
-                self.robot = rtb.ERobot.URDF(tmp_path)
-                self.get_logger().info('ERobot 방식으로 모델 로드 성공')
-            except Exception as e1:
-                # 라이브러리 버전이나 환경에 따른 대안 로드 방식(추출 로직 포함)
-                self.get_logger().warn(f'ERobot 방식 실패, 대안 시도... ({str(e1)})')
-                
-                import roboticstoolbox.models.URDF as urdf_mod
-                if hasattr(urdf_mod, 'URDF'):
-                    full_robot = urdf_mod.URDF().parse_filepath(tmp_path).to_robot()
-                else:
-                    full_robot = rtb.models.URDF(tmp_path)
-                
-                # M0609에 그리퍼 등이 달린 경우, 본체까지(link_6까지)만 분리하여 모델 구축
-                try:
-                    self.robot = full_robot.extract_robot(full_robot.links[6])
-                    self.get_logger().info('full_robot에서 6축 추출 성공')
-                except:
-                    self.robot = full_robot
-                    self.get_logger().info('추출 실패로 전체 모델 사용')
-
-            # 사용이 끝난 임시 URDF 파일은 삭제하여 시스템 자원 확보
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-                
+            self.robot = load_robot_from_xml(self.urdf_xml)
+            self.get_logger().info('로봇 모델 생성 성공 (팔 6축: base_link → link_6)')
         except Exception as e:
             # 모델이 없으면 분석을 할 수 없으므로, 아무것도 안 하는 노드로 남지 않고 오류로 종료
-            self.get_logger().error(f'최종 모델 로드 실패: {str(e)}')
+            self.get_logger().error(f'모델 로드 실패: {str(e)}')
             raise RuntimeError(f'로봇 모델을 만들지 못했습니다: {e}') from e
 
-        # 모델이 인식하는 로봇의 자유도(DoF, Degree of Freedom) 저장(6축 vs. 12축 등 구분용)
+        # 모델이 인식하는 로봇의 자유도(DoF). 팔만 남겼으므로 6이어야 한다
         self.dof = self.robot.n
+        if self.dof != 6:
+            self.get_logger().warn(f'팔 모델의 관절 수가 6이 아닙니다 (DOF: {self.dof}). 관절 이름을 확인하세요.')
 
-        # 말단 링크를 명시 (없으면 Toolbox 기본값 사용)
-        self.end = END_LINK if END_LINK in self.robot.link_dict else None
-        if self.end is None:
-            self.get_logger().warn(f"'{END_LINK}' 링크가 없어 Toolbox 기본 말단 링크를 사용합니다: {[l.name for l in self.robot.ee_links]}")
-
-        # 손목 중심 링크가 있으면 특이점 종류(손목/팔꿈치/어깨) 분류와 분해 타원체를 계산
+        # 말단 링크·손목 중심 링크를 명시 (특이점 종류 분류와 분해 타원체에 필요)
+        self.end = END_LINK
         self.wrist = sg.WRIST_LINK if sg.WRIST_LINK in self.robot.link_dict else None
         if self.wrist is None:
             self.get_logger().warn(f"'{sg.WRIST_LINK}' 링크가 없어 특이점 종류 분류는 하지 않습니다.")
-        base = getattr(self.robot, 'base_link', None)
-        self.frame_id = base.name if base is not None else 'base_link'
+        self.frame_id = sg.root_link(self.urdf_xml)   # RViz 마커 좌표계 (보통 base_link)
 
         # RViz 시각화: 가동성 타원체 (Add → By topic → /manipulability_ellipsoid → MarkerArray)
         self.marker_pub = self.create_publisher(MarkerArray, ELLIPSOID_TOPIC, 10)
@@ -169,13 +141,8 @@ class M0609SingularityMonitor(Node):
             # 1. 수신된 조인트 이름과 위치값을 매핑하여 딕셔너리화(순서 혼선 방지)
             joint_map = {name: pos for name, pos in zip(msg.name, msg.position)}
 
-            # 2. 모델 설정에 맞춰 분석할 관절 각도 추출
-            if self.dof == 6:
-                # 순수 6축 모델일 경우 정의된 6개 조인트만 사용
-                q = [joint_map[name] for name in JOINT_NAMES if name in joint_map]
-            else:
-                # 그리퍼 등이 포함된 모델일 경우 메시지 앞쪽부터 모델 자유도만큼 사용 (본체 6축이 앞에 있다고 가정)
-                q = list(msg.position[:self.dof])
+            # 2. 팔 관절 6개를 이름으로 추출 (그리퍼 관절이 섞여 있거나 순서가 달라도 됨)
+            q = [joint_map[name] for name in JOINT_NAMES if name in joint_map]
 
             # 이름이 달라 관절을 못 찾으면 아무 기록도 안 남기고 조용히 넘어가므로, 한 번은 알려 준다
             if len(q) != self.dof and not self._missing_warned:
