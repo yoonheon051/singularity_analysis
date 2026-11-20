@@ -15,7 +15,7 @@ from singularity_analysis import singularity as sg
 
 pytestmark = needs_urdf
 try:
-    import roboticstoolbox as rtb
+    importlib.import_module('roboticstoolbox')
 except Exception as e:   # 설치 안 됨(ModuleNotFoundError)뿐 아니라, 설치됐지만 불러오지 못하는 경우(DLL 차단 등)도 건너뜀
     pytest.skip(f'Robotics Toolbox 를 불러올 수 없음: {type(e).__name__}', allow_module_level=True)
 
@@ -61,7 +61,8 @@ def test_analysis_matches_reference(toolbox_robot, reference, q):
 
 def test_raw_urdf_has_ambiguous_end_effector():
     """README '말단 링크를 link_6으로 지정하는 이유'의 근거: 원본 URDF 를 그대로 불러오면 끝 링크가 둘(base, tool0)"""
-    raw = rtb.ERobot.URDF(URDF)
+    from singularity_analysis.calculate_jacobian import toolbox_robot_from_file
+    raw = toolbox_robot_from_file(URDF)
     names = [link.name for link in raw.ee_links]
     assert 'base' in names and 'tool0' in names
 
@@ -83,3 +84,13 @@ def test_velocity_demo_numbers(toolbox_robot):
     assert inverse['speed'].max() > 1000
     assert limited['pos_err'].max() > 40
     assert dls['speed'].max() < 0.3 and dls['pos_err'].max() < 1.0
+
+
+def test_loader_uses_non_deprecated_api():
+    """Toolbox 1.5 이상에서는 deprecated 인 Robot.URDF() 를 부르지 않아야 함 (경고 없이 불러오기)"""
+    import warnings
+    from singularity_analysis.calculate_jacobian import load_robot
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        load_robot(URDF)
+    assert not [w for w in caught if 'Robot.URDF() is deprecated' in str(w.message)]

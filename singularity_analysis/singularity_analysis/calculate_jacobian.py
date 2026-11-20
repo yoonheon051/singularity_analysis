@@ -14,20 +14,34 @@ except ImportError:                   # python3 파일경로로 직접 실행할
 END_LINK = sg.END_LINK
 
 
+def toolbox_robot_from_file(path):
+    """
+    URDF 파일 → Robotics Toolbox 로봇 모델 (파일 그대로, 손대지 않음)
+    - Toolbox 1.5 이상: URDF_read() 로 링크를 읽어 Robot 을 직접 만든다 (Toolbox 가 권장하는 방식)
+    - 그보다 예전 Toolbox: ERobot.URDF() 를 쓴다 (1.5 부터는 deprecated 경고가 나오는 방식)
+    (rtb.models.URDF 는 모델 모음 모듈이라 호출할 수 없다)
+    """
+    import roboticstoolbox as rtb   # 무거운 라이브러리라 실제로 모델을 만들 때만 불러옴 (테스트는 없이도 돌아감)
+    try:
+        from roboticstoolbox.models.URDF.URDFRobot import URDF_read
+    except ImportError:
+        return rtb.ERobot.URDF(path)
+    elinks, name, _ = URDF_read(path)
+    return rtb.Robot(elinks, name=name)
+
+
 def load_robot_from_xml(urdf_xml):
     """
     URDF 문자열 → Robotics Toolbox 로봇 모델 (팔 6축만)
     그리퍼·곁가지 링크를 떼고(base_link → link_6) 불러오므로, 그리퍼가 달린 URDF(m0609_rg2)를 줘도 항상 6축 모델이 된다.
     """
-    import roboticstoolbox as rtb   # 무거운 라이브러리라 실제로 모델을 만들 때만 불러옴 (테스트는 없이도 돌아감)
     arm_xml = sg.arm_only_urdf(urdf_xml, END_LINK)
-    # Toolbox 는 파일 경로로만 읽으므로 임시 파일에 써서 넘김
+    # Toolbox 는 파일 경로로 읽으므로 임시 파일에 써서 넘김
     with tempfile.NamedTemporaryFile('w', suffix='.urdf', delete=False, encoding='utf-8') as tmp:
         tmp.write(arm_xml)
         path = tmp.name
     try:
-        # (rtb.models.URDF 는 모델 모음 모듈이라 호출할 수 없다. 파일을 읽는 함수는 ERobot.URDF)
-        return rtb.ERobot.URDF(path)
+        return toolbox_robot_from_file(path)
     finally:
         os.remove(path)
 

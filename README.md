@@ -102,7 +102,7 @@ singularity_analysis/                  # 저장소 (~/colcon_ws/src 에 clone)
 --------------------------------------------------------------------------------
 항목            | 실제 구현 파일           | 구현 방식
 --------------------------------------------------------------------------------
-Kinematic Tree | m0609_ros_analyzer.py | rtb.ERobot.URDF를 통한 모델 로드
+Kinematic Tree | m0609_ros_analyzer.py | Toolbox URDF_read()로 모델 생성 (예전 버전은 ERobot.URDF)
 --------------------------------------------------------------------------------
 실시간 데이터 획득 | m0609_ros_analyzer.py | /joint_states 토픽 구독 및 실시간 연산
 --------------------------------------------------------------------------------
@@ -333,7 +333,7 @@ self.create_subscription(
 2. URDF 기반 Robot Model 생성
 
 ```
-self.robot = rtb.ERobot.URDF(tmp_path)
+self.robot = load_robot_from_xml(self.urdf_xml)   # 팔 6축만 남겨 Toolbox 모델로 (URDF_read)
 ```
 URDF → Kinematic Model 변환
 
@@ -546,7 +546,7 @@ ros2 run singularity_analysis calculate_jacobian  # 한 자세 분석
 
 ### 8. 테스트
 
-ROS 없이 도는 테스트 26개와, Robotics Toolbox가 있을 때 추가로 도는 교차 검증 13개입니다. Robotics Toolbox 대신, 같은 M0609 URDF로 직접 만든 NumPy 기구학(`test/conftest.py`의 `ReferenceRobot`)을 쓰고, 분석 노드는 가짜 `rclpy`로 처음부터 실행합니다.
+ROS 없이 도는 테스트 26개와, Robotics Toolbox가 있을 때 추가로 도는 교차 검증 14개입니다. Robotics Toolbox 대신, 같은 M0609 URDF로 직접 만든 NumPy 기구학(`test/conftest.py`의 `ReferenceRobot`)을 쓰고, 분석 노드는 가짜 `rclpy`로 처음부터 실행합니다.
 
 ```bash
 python3 -m pytest singularity_analysis/test -v      # 저장소 최상위에서
@@ -558,7 +558,7 @@ colcon test --packages-select singularity_analysis && colcon test-result --verbo
 | `test_singularity.py` | URDF 정리(그리퍼·미믹 관절 제거), Jacobian vs 수치미분, 행렬식 분해, 특이점 분류, 타원체가 해당 종류에서만 납작해지는지, DLS 관절 속도 |
 | `test_analyzer.py` | 분석 노드: 그리퍼 URDF로 6축 모델 생성, 관절을 이름으로 찾기(순서가 섞이고 그리퍼 관절이 있어도), CSV 기록·flush·닫기, 지표 토픽 = CSV, 타원체 마커 위치·색, 종류가 바뀔 때만 경고, 관절 이름 불일치 경고 1회, 잘못된 URDF면 빈 CSV 없이 종료 |
 | `test_scripts.py` | `visualize_results`(새 CSV·예전 CSV+inf, 최신 CSV 고르기), `calculate_jacobian`, `plot_ellipsoid`(기본 4자세가 의도한 종류로 분류), `velocity_demo`가 끝까지 돌고 결과 파일을 남기는지 |
-| `test_toolbox.py` | **실제 Robotics Toolbox**와 교차 검증: fkine·Jacobian이 `ReferenceRobot`과 같은지, 분석 결과가 같은지, 원본 URDF의 끝 링크가 둘(`base`, `tool0`)인지, RG2 xacro가 6축으로 불러와지는지, README의 DLS 숫자가 재현되는지. Toolbox를 불러올 수 없으면 건너뜀 |
+| `test_toolbox.py` | **실제 Robotics Toolbox**와 교차 검증: fkine·Jacobian이 `ReferenceRobot`과 같은지, 분석 결과가 같은지, 원본 URDF의 끝 링크가 둘(`base`, `tool0`)인지, RG2 xacro가 6축으로 불러와지는지, README의 DLS 숫자가 재현되는지, deprecated 된 `Robot.URDF()`를 부르지 않는지. Toolbox를 불러올 수 없으면 건너뜀 |
 
 **자동 테스트(GitHub Actions)**: push할 때마다 `.github/workflows/test.yml`이 Ubuntu 22.04 + Python 3.10(ROS2 Humble과 같은 환경)에서 Robotics Toolbox까지 설치해 전체 테스트를 돌립니다. 결과는 README 맨 위 배지와 저장소의 **Actions** 탭에서 볼 수 있습니다.
 
@@ -584,7 +584,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     A(["노드 시작"]) --> C["/robot_description 대기<br/>Transient Local로 늦게 켜도 받음"]
-    C --> D["URDF에서 팔 사슬(base_link → link_6)만 남김<br/>→ rtb.ERobot.URDF"]
+    C --> D["URDF에서 팔 사슬(base_link → link_6)만 남김<br/>→ Toolbox 모델 (URDF_read)"]
     D --> E{"모델 생성 성공?"}
     E -- 예 --> B["이번 실행용 CSV 열기<br/>analysis_날짜_시각.csv, 1초마다 flush"]
     E -- 아니요 --> X(["오류로 종료"])
