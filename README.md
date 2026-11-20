@@ -38,6 +38,7 @@ singularity_analysis
 │   ├── calculate_jacobian.py
 │   ├── m0609_ros_analyzer.py 
 │   ├── plot_ellipsoid.py   # 여러 자세의 가동성 타원체 3D 그림
+│   ├── velocity_demo.py    # 특이점 근처 관절 속도 폭주 vs 감쇠 최소제곱(DLS) 시뮬레이션
 │   └── visualize_results.py
 ├── docs/                   # README에 넣은 예시 그림
 └── results/                # 분석 결과 이미지나 로그 저장
@@ -79,7 +80,11 @@ Jacobian 산출   | calculate_jacobian.py | jacob0(q, end='link_6')로 6x6 행�
 --------------------------------------------------------------------------------
 특이점 종류 분류  |     singularity.py     | det(J) = det(J11)·det(J22) 분해
 --------------------------------------------------------------------------------
-결과 저장        | m0609_ros_analyzer.py | results/analysis_log.csv 파일로 기록
+결과 저장        | m0609_ros_analyzer.py | 실행마다 results/analysis_날짜_시각.csv 로 기록
+--------------------------------------------------------------------------------
+지표 토픽        | m0609_ros_analyzer.py | /singularity/* (rqt_plot 실시간 그래프)
+--------------------------------------------------------------------------------
+속도 폭주 / DLS  |   velocity_demo.py    | J⁻¹ vs 속도 제한 vs Jᵀ(JJᵀ+λ²I)⁻¹ 비교
 --------------------------------------------------------------------------------
 ```
 
@@ -183,6 +188,26 @@ $$\det J = \det J_{11} \cdot \det J_{22}$$
 
 계산은 `singularity.py`에 있고, Toolbox로 `jacob0(q, end='link_6')`(말단)과 `jacob0(q, end='link_5')`(손목 중심) 두 Jacobian만 있으면 됩니다.
 `link_5`가 없는 URDF에서는 종류 분류를 건너뛰고 경고를 띄웁니다.
+
+## 속도 명령 폭주와 감쇠 최소제곱 (DLS)
+
+[프로젝트 개요](#프로젝트-개요)의 "속도 명령 폭주"를 직접 보여 주는 시뮬레이션입니다(`velocity_demo.py`, ROS 없이 URDF만 사용).
+
+**상황**: 말단 자세(방향)는 고정하고 아래로 25 cm를 5 cm/s로 직선 이동합니다. 이 경로는 $q_5$ 를 0.3 rad에서 0을 지나 −0.3 rad까지 끌고 가서 **손목 특이점을 통과**합니다.
+매 순간 원하는 말단 속도 $\dot{x}$ (경로 속도 + 오차 보정)를 관절 속도로 바꾸는 방법 세 가지를 비교했습니다.
+
+| 방법 | 식 | 최대 관절 속도 | 최대 경로 오차 |
+|---|---|---|---|
+| 역행렬 | $\dot{q} = J^{-1}\dot{x}$ | **5,558 rad/s** | 0.63 mm |
+| 역행렬 + 관절 속도 제한 (2.618 rad/s) | 위 $\dot{q}$ 를 비율 축소 | 2.62 rad/s | **54.7 mm** |
+| 감쇠 최소제곱 (DLS) | $\dot{q} = J^T (JJ^T + \lambda^2 I)^{-1} \dot{x}$ | **0.21 rad/s** | 0.49 mm |
+
+- **역행렬**: 특이점에서 $J^{-1}$ 이 무한대로 커져, 아주 짧은 순간 4·6번 관절이 반대 방향으로 약 두 바퀴(±12.6 rad)씩 돕니다. 실제 로봇이라면 속도 한계(M0609 URDF 기준 2.618 rad/s)의 2,000배가 넘는 명령입니다.
+- **역행렬 + 속도 제한**: 실제 제어기처럼 속도를 막으면 폭주는 없지만, 그 사이 경로를 못 따라가 5 cm 넘게 벗어납니다.
+- **DLS**: 최소 특이값이 $\varepsilon$ 보다 작아질 때만 $\lambda^2 = \left(1 - (\sigma_{min}/\varepsilon)^2\right)\lambda_{max}^2$ 로 감쇠를 켭니다(Nakamura·Chiaverini 방식). 못 움직이는 방향의 속도를 조금 포기하는 대신 관절 속도를 작게 유지합니다.
+- **감쇠의 대가**: $\varepsilon = 0.1$, $\lambda_{max} = 0.15$ 로 감쇠를 키우면 관절 속도는 비슷하지만(0.20 rad/s) 경로 오차가 5.1 mm로 커집니다. 안전(속도)과 정확도(오차) 사이의 균형을 $\lambda$ 로 고르는 것입니다.
+
+![속도 폭주와 DLS](docs/velocity_dls_demo.png)
 
 ## 파일 별 상세 설명
 
@@ -311,10 +336,24 @@ RViz에서 **Add → By topic → `/manipulability_ellipsoid` → MarkerArray** 
 - `wrist` (손목 4~6축 각속도): 손목 특이점 근처에서 납작해지고 빨간색
 - 크기는 반지름 × 0.3 m (`ELLIPSOID_SCALE`)
 
+지표 토픽도 함께 발행합니다. `rqt_plot`으로 실시간 그래프를 보거나, 다른 노드가 구독해 경고·감속에 쓸 수 있습니다.
+
+| 토픽 | 타입 | 내용 |
+|---|---|---|
+| `/singularity/manipulability` | `std_msgs/Float64` | Manipulability $w$ |
+| `/singularity/condition_number` | `std_msgs/Float64` | 조건수 (완전 특이면 inf) |
+| `/singularity/sigma_min` | `std_msgs/Float64` | 최소 특이값 |
+| `/singularity/type` | `std_msgs/String` | `normal` / `wrist` / `elbow` / `shoulder` / 겹치면 `wrist+elbow` |
+
+```
+ros2 run rqt_plot rqt_plot /singularity/manipulability/data /singularity/sigma_min/data
+ros2 topic echo /singularity/type
+```
+
 7. CSV 자동 저장
 
 ```
-results/analysis_log.csv
+results/analysis_20261120_153000.csv   (실행할 때마다 새 파일)
 ```
 
 다음 데이터를 저장:
@@ -326,7 +365,7 @@ results/analysis_log.csv
 - 특이점 종류(`normal` / `wrist` / `elbow` / `shoulder` / 겹치면 `wrist+elbow`), 최소 특이값, 손목·팔꿈치·어깨 지표
 - 6x6 Jacobian Matrix
 
-열 구성이 다른 예전 CSV가 있으면 `analysis_log_old_날짜_시각.csv`로 이름을 바꿔 보관하고 새로 시작합니다.
+실행할 때마다 새 파일을 만들어 실행끼리 섞이지 않습니다. 파일은 열어 둔 채로 쓰고 1초마다 디스크에 내보내며(`/joint_states`가 수십 Hz라 매번 열고 닫지 않음), 노드를 끌 때 닫습니다.
 
 8. 저장되는 CSV 예시
 
@@ -377,7 +416,7 @@ ax1.axhline(y=0.01)
 python3 scripts/visualize_results.py
 ```
 
-6. 출력 결과 (`results/singularity_analysis_plot.png`로도 저장)
+6. 출력 결과 (CSV 옆에 `analysis_날짜_시각_plot.png`로도 저장)
 
 - Manipulability 그래프
 - Condition Number 그래프
@@ -397,6 +436,16 @@ python3 scripts/plot_ellipsoid.py m0609.urdf --q 0 -0.3 1.2 0 1 0 --q 0 0 0 0 0 
 - 윗줄: ARM 타원체, 아랫줄: WRIST 타원체 ([왜 둘로 나누나](#왜-타원체를-둘로-나누어-그리나))
 - 빨간 화살표: 가장 움직이기 어려운 방향(가장 짧은 축)
 - 결과: `results/manipulability_ellipsoids.png`
+
+### velocity_demo.py
+특이점을 지나가는 직선 경로에서 역행렬 / 역행렬 + 속도 제한 / DLS의 관절 속도와 경로 오차를 비교합니다([설명](#속도-명령-폭주와-감쇠-최소제곱-dls)).
+
+```
+python3 scripts/velocity_demo.py m0609.urdf
+python3 scripts/velocity_demo.py m0609.urdf --eps 0.1 --lam 0.15   # 감쇠를 키워 정확도와의 균형 비교
+```
+- 터미널: 방법별 최대 관절 속도·위치 오차·자세 오차 표
+- 결과: `results/velocity_dls_demo.png` (관절 속도, 경로 오차, 최소 특이값과 λ, 손목 관절 각도)
 
 ## 전체 실행 순서
 
@@ -445,7 +494,7 @@ Rviz2 또는 실제 로봇에서 Joint 값 변화
 ### 6. CSV 결과 확인
 
 ```
-results/analysis_log.csv
+results/analysis_날짜_시각.csv   (노드 시작 시 터미널에 경로가 찍힘)
 ```
 
 ### 7. 결과 시각화
@@ -453,12 +502,19 @@ results/analysis_log.csv
 ```
 python3 scripts/visualize_results.py
 ```
-그래프는 화면에 띄우고 `results/singularity_analysis_plot.png`로도 저장합니다. 다른 CSV를 보려면 경로를 인자로 줍니다(`python3 scripts/visualize_results.py 다른.csv`).
+인자 없이 실행하면 `results/`에서 **가장 최근 실행의 CSV**를 그립니다. 그래프는 화면에 띄우고 CSV 옆에 `..._plot.png`로도 저장합니다. 다른 실행을 보려면 경로를 줍니다(`python3 scripts/visualize_results.py results/analysis_20261120_153000.csv`).
 
 ### 8. (선택) RViz 타원체 / 자세별 타원체 그림
 
 - 노드가 켜져 있는 동안 RViz에서 **Add → By topic → `/manipulability_ellipsoid`** 를 추가하면 로봇을 움직일 때 타원체가 실시간으로 변합니다.
 - ROS 없이 자세별 그림만 보려면: `python3 scripts/plot_ellipsoid.py m0609.urdf`
+- 지표 실시간 그래프: `ros2 run rqt_plot rqt_plot /singularity/manipulability/data`
+
+### 9. (선택) 속도 폭주 vs DLS 시뮬레이션
+
+```
+python3 scripts/velocity_demo.py m0609.urdf
+```
 
 ## 분석 흐름
 
@@ -469,9 +525,11 @@ flowchart LR
     SIM["RViz2 시뮬레이션<br/>my_robot_description"] -- "/robot_description (URDF)" --> AN["m0609_ros_analyzer.py"]
     SIM -- "/joint_states" --> AN
     REAL["실제 로봇 (선택)"] -. "/joint_states" .-> AN
-    AN -- "행마다 기록" --> CSV[("results/analysis_log.csv")]
+    AN -- "행마다 기록" --> CSV[("results/analysis_날짜_시각.csv")]
+    AN -- "/singularity/* 토픽" --> RQT["rqt_plot"]
+    URDF --> VD["velocity_demo.py<br/>속도 폭주 vs DLS"]
     CSV --> VIS["visualize_results.py"]
-    VIS --> PNG[("results/singularity_analysis_plot.png")]
+    VIS --> PNG[("results/analysis_날짜_시각_plot.png")]
     URDF[("m0609.urdf")] --> CJ["calculate_jacobian.py<br/>한 자세만 계산"]
 ```
 
@@ -479,12 +537,12 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A(["노드 시작"]) --> B["results/analysis_log.csv 준비<br/>없으면 헤더 작성"]
-    B --> C["/robot_description 대기<br/>Transient Local로 늦게 켜도 받음"]
+    A(["노드 시작"]) --> C["/robot_description 대기<br/>Transient Local로 늦게 켜도 받음"]
     C --> D["URDF → 로봇 모델<br/>rtb.ERobot.URDF"]
     D --> E{"모델 생성 성공?"}
+    E -- 예 --> B["이번 실행용 CSV 열기<br/>analysis_날짜_시각.csv, 1초마다 flush"]
     E -- 아니요 --> X(["오류로 종료"])
-    E -- 예 --> F[["/joint_states 수신할 때마다"]]
+    B --> F[["/joint_states 수신할 때마다"]]
     F --> G["이름으로 joint_1 ~ joint_6 각도 q 추출"]
     G --> H{"6개 모두 있음?"}
     H -- 아니요 --> W["건너뜀<br/>처음 한 번만 이름 불일치 경고"]
@@ -495,7 +553,8 @@ flowchart TD
     T --> TC{"종류가 바뀌었나?"}
     TC -- 예 --> WARN["특이점 근처 진입/이탈 경고"]
     T --> L["CSV 한 줄 기록<br/>시각, q1~q6, w, 조건수, 종류·지표, J 36개<br/>지표 로그는 1초에 한 번"]
-    T --> E["RViz 타원체 발행<br/>/manipulability_ellipsoid"]
+    T --> RV["RViz 타원체 발행<br/>/manipulability_ellipsoid"]
+    T --> TP["지표 토픽 발행<br/>/singularity/*"]
 ```
 
 ### 특이점 판단

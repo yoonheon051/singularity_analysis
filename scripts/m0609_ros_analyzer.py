@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import String, Float64
 from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from visualization_msgs.msg import Marker, MarkerArray
@@ -30,6 +30,15 @@ CSV_HEADER = (['timestamp', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'manipulability'
 ELLIPSOID_TOPIC = '/manipulability_ellipsoid'   # RViz에서 MarkerArray 로 추가해서 봄
 ELLIPSOID_SCALE = 0.3                           # 타원체 반지름(m/s 또는 rad/s per rad/s)을 RViz에서 몇 m 로 그릴지
 
+# 지표 토픽: rqt_plot 등으로 실시간 그래프를 볼 수 있다 (예: rqt_plot /singularity/manipulability/data)
+METRIC_TOPICS = {
+    'manipulability': '/singularity/manipulability',
+    'condition_number': '/singularity/condition_number',
+    'sigma_min': '/singularity/sigma_min',
+}
+TYPE_TOPIC = '/singularity/type'   # 'normal' / 'wrist' / 'elbow' / 'shoulder' / 'wrist+elbow' ...
+CSV_FLUSH_SEC = 1.0                # CSV 를 디스크에 내보내는 간격 (매 메시지마다 파일을 열고 닫지 않음)
+
 class M0609SingularityMonitor(Node):
     '''
     M0609의 특이점(Singularity) 및 가동성(Manipulability)을 실시간으로 모니터링하고, 
@@ -40,10 +49,10 @@ class M0609SingularityMonitor(Node):
         super().__init__('m0609_singularity_monitor')
         
         # 1. 데이터 저장 설정
-        # 분석 결과를 저장할 CSV 파일 경로 설정 및 결과 폴더 자동 생성 
-        self.results_path = os.path.join(RESULTS_DIR, 'analysis_log.csv')
+        # 실행할 때마다 새 파일(results/analysis_날짜_시각.csv)에 기록 → 실행끼리 섞이지 않고 비교하기 쉬움
         os.makedirs(RESULTS_DIR, exist_ok=True)
-        self.init_csv()
+        self.results_path = os.path.join(RESULTS_DIR, datetime.now().strftime('analysis_%Y%m%d_%H%M%S.csv'))
+        self.csv_file = None   # 모델을 만든 뒤에 연다 (실패하면 빈 파일이 남지 않게)
         self._missing_warned = False   # 관절 이름이 안 맞을 때 경고를 한 번만 출력
         self._last_type = 'normal'     # 특이점 종류가 바뀔 때만 알리기 위함
 
@@ -118,23 +127,36 @@ class M0609SingularityMonitor(Node):
         # RViz 시각화: 가동성 타원체 (Add → By topic → /manipulability_ellipsoid → MarkerArray)
         self.marker_pub = self.create_publisher(MarkerArray, ELLIPSOID_TOPIC, 10)
 
+        # 지표 토픽 (rqt_plot 실시간 그래프, 다른 노드에서 경고에 활용)
+        self.metric_pubs = {k: self.create_publisher(Float64, topic, 10) for k, topic in METRIC_TOPICS.items()}
+        self.type_pub = self.create_publisher(String, TYPE_TOPIC, 10)
+
+        # CSV 를 열고, 주기적으로 디스크에 내보냄 (끌 때는 destroy_node 에서 마지막으로 내보내고 닫음)
+        self.init_csv()
+        self.get_logger().info(f'기록 파일: {self.results_path}')
+        self.create_timer(CSV_FLUSH_SEC, self.flush_csv)
+
         # 실시간 관절 각도 데이터를 수신하기 위해 /joint_states 토픽 구독
         self.create_subscription(JointState, '/joint_states', self.joint_callback, 10)
         self.get_logger().info(f'모니터링 시작! (DOF: {self.dof})')
 
     def init_csv(self):
-        # CSV 파일의 헤더(열 이름)를 정의하고 생성
-        if os.path.exists(self.results_path):
-            with open(self.results_path, newline='') as f:
-                old_header = next(csv.reader(f), None)
-            if old_header == CSV_HEADER:
-                return   # 같은 형식이면 이어서 기록
-            # 열 구성이 다른 예전 파일에 이어 쓰면 pandas 가 읽지 못하므로, 예전 파일은 이름을 바꿔 보관
-            backup = self.results_path.replace('.csv', datetime.now().strftime('_old_%Y%m%d_%H%M%S.csv'))
-            os.replace(self.results_path, backup)
-            self.get_logger().warn(f'열 구성이 다른 예전 CSV 를 {backup} 로 옮겼습니다.')
-        with open(self.results_path, 'w', newline='') as f:
-            csv.writer(f).writerow(CSV_HEADER)
+        # 이번 실행용 CSV 파일을 열어 두고 헤더(열 이름)를 씀.
+        # /joint_states 는 초당 수십 번 들어오므로 매번 파일을 열고 닫지 않고, flush_csv 가 주기적으로 디스크에 내보낸다.
+        self.csv_file = open(self.results_path, 'w', newline='')
+        self.csv_writer = csv.writer(self.csv_file)
+        self.csv_writer.writerow(CSV_HEADER)
+        self.csv_file.flush()
+
+    def flush_csv(self):
+        if self.csv_file is not None and not self.csv_file.closed:
+            self.csv_file.flush()
+
+    def destroy_node(self):
+        # 종료 시 남은 기록을 내보내고 파일을 닫음
+        if getattr(self, 'csv_file', None) is not None and not self.csv_file.closed:
+            self.csv_file.close()
+        super().destroy_node()
 
     def urdf_callback(self, msg):
         # 로봇 구조 정보 수신 시 호출되는 콜백 함수
@@ -185,8 +207,9 @@ class M0609SingularityMonitor(Node):
                         self.get_logger().warn(f'특이점 근처 진입: {kind} (지표: {self._fmt_indices(a)})')
                     self._last_type = kind
 
-                # 분석 결과 파일 저장 + RViz 타원체
+                # 분석 결과 파일 저장 + 지표 토픽 + RViz 타원체
                 self.save_to_csv(q_np, a, kind)
+                self.publish_metrics(a, kind)
                 self.publish_ellipsoids(q_np, a)
 
         except Exception as e:
@@ -212,8 +235,17 @@ class M0609SingularityMonitor(Node):
         # 최종 데이터 행 구성: CSV_HEADER 순서
         row = [timestamp] + q_save + [a['manipulability'], a['condition_number']] + extra + j_flat
 
-        with open(self.results_path, 'a', newline='') as f:
-            csv.writer(f).writerow(row)
+        self.csv_writer.writerow(row)   # 디스크에는 flush_csv 가 1초마다 내보냄
+
+    def publish_metrics(self, a, kind):
+        """지표를 토픽으로 발행 (rqt_plot /singularity/manipulability/data 등으로 실시간 그래프)"""
+        for key, pub in self.metric_pubs.items():
+            msg = Float64()
+            msg.data = float(a[key])
+            pub.publish(msg)
+        msg = String()
+        msg.data = kind
+        self.type_pub.publish(msg)
 
     def publish_ellipsoids(self, q, a):
         """RViz용 가동성 타원체. 손목 중심에 두 개를 그린다 (plot_ellipsoid.py 와 같은 분해).

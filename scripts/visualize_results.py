@@ -125,18 +125,27 @@ def plot_singularity_metrics(csv_path):
     # 4. 레이아웃 최적화: 그래프 간 간격 자동 조정 및 화면 출력
     plt.tight_layout()
 
-    # 5. 그래프를 CSV와 같은 results/ 폴더에 이미지로 저장 (화면이 없는 환경에서도 결과가 남도록)
-    png_path = os.path.join(os.path.dirname(csv_path), 'singularity_analysis_plot.png')
+    # 5. 그래프를 CSV와 같은 폴더에 CSV 이름을 딴 이미지로 저장 (화면이 없는 환경에서도 결과가 남도록)
+    png_path = os.path.splitext(csv_path)[0] + '_plot.png'
     plt.savefig(png_path, dpi=150)
     print(f"그래프 저장: {png_path}")
 
     plt.show()
 
+
+def latest_csv(results_dir):
+    """results/ 에서 가장 최근에 기록된 분석 CSV (실행마다 analysis_날짜_시각.csv, 예전 버전은 analysis_log.csv)"""
+    files = [os.path.join(results_dir, f) for f in os.listdir(results_dir)
+             if f.startswith('analysis_') and f.endswith('.csv')] if os.path.isdir(results_dir) else []
+    return max(files, key=os.path.getmtime) if files else os.path.join(results_dir, 'analysis_log.csv')
+
+
 # 파이썬 스크립트 실행 엔트리 포인트
 if __name__ == "__main__":
 
-    # 데이터 수집 결과인 analysis_log.csv 경로 지정 (실행 위치와 상관없이 저장소의 results/ 폴더)
-    # 다른 파일을 보려면 인자로 경로를 준다: python3 scripts/visualize_results.py 다른.csv
+    # 인자가 없으면 저장소 results/ 폴더에서 가장 최근 실행의 CSV 를 그림
+    # 다른 파일을 보려면 인자로 경로를 준다: python3 scripts/visualize_results.py results/analysis_20261120_153000.csv
     repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    csv_file = sys.argv[1] if len(sys.argv) > 1 else os.path.join(repo_dir, 'results', 'analysis_log.csv')
+    csv_file = sys.argv[1] if len(sys.argv) > 1 else latest_csv(os.path.join(repo_dir, 'results'))
+    print(f"그릴 파일: {csv_file}")
     plot_singularity_metrics(csv_file)
