@@ -120,6 +120,9 @@ def toolbox_stub(monkeypatch):
     mod = types.ModuleType('roboticstoolbox')
     mod.ERobot = types.SimpleNamespace(URDF=ReferenceRobot.from_file)
     monkeypatch.setitem(sys.modules, 'roboticstoolbox', mod)
+    # 진짜 Toolbox 가 설치된 환경(CI)에서는 하위 모듈(URDF_read)이 따로 불러와져 진짜·가짜가 섞일 수 있으므로 막는다.
+    # sys.modules 값이 None 이면 그 모듈을 import 할 때 ImportError → 로더가 ERobot.URDF(여기서는 ReferenceRobot)를 씀
+    monkeypatch.setitem(sys.modules, 'roboticstoolbox.models.URDF.URDFRobot', None)
     return mod
 
 
