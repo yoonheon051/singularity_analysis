@@ -3,7 +3,7 @@
 
 동아대학교 기계공학과 2026-1학기 동역학1분반 취업공결 인정 과제
 
-ROS2 Humble 기반의 6축 산업용 로봇(M0609) 의 Jacobian 행렬을 실시간으로 계산하고,
+ROS2(Jazzy·Humble) 기반의 6축 산업용 로봇(M0609) 의 Jacobian 행렬을 실시간으로 계산하고,
 Manipulability / Condition Number 기반으로 Singularity(특이점) 를 분석하는 프로젝트입니다.
 
 본 프로젝트는 다음 기능을 제공합니다.
@@ -21,25 +21,31 @@ Manipulability / Condition Number 기반으로 Singularity(특이점) 를 분석
 2026.04.24 현재, m0609 6축 로봇팔만 지원합니다. M0609 시뮬레이션(RViz2)용 로봇 모델 패키지 `my_robot_description`도 이 저장소에 함께 들어 있어서, **저장소 하나로 시뮬레이션부터 분석까지** 실행할 수 있습니다. (예전 별도 저장소 [my_robot_description](https://github.com/yoonheon051/my_robot_description)의 내용을 옮겨 왔습니다.)
 
 ## 개발환경
-OS: UBUNTU 22.04.05 LTS
+ROS2 버전은 Ubuntu 버전에 맞춰 정해집니다. 두 조합 모두 지원하며, 아래 명령은 `$ROS_DISTRO`(ROS 를 source 하면 자동으로 `jazzy`/`humble`)를 써서 그대로 쓸 수 있습니다.
 
-Framework: ROS2 Humble
+| OS | ROS2 | Python | 비고 |
+|---|---|---|---|
+| **Ubuntu 24.04 LTS** | **Jazzy** | 3.12 | 기본 |
+| Ubuntu 22.04 LTS | Humble | 3.10 | 처음 개발한 환경 |
 
-Language: Python 3.10.12
+Key Library: NumPy, Roboticstoolbox-python(1.5 이상은 Python 3.10~3.14 지원), pandas·matplotlib(시각화)
 
-Key Library: NumPy 1.24.4, Roboticstoolbox-python, PyKDL, pandas·matplotlib(시각화)
+GitHub Actions 가 두 조합(22.04 + Python 3.10, 24.04 + Python 3.12) 모두에서 테스트합니다([테스트](#8-테스트)).
 
 ## 빠른 시작
 
 ```bash
+# 0. ROS 환경 (Ubuntu 24.04 는 jazzy, 22.04 는 humble)
+source /opt/ros/jazzy/setup.bash
+
 # 1. 워크스페이스에 받기
 mkdir -p ~/colcon_ws/src && cd ~/colcon_ws/src
 git clone https://github.com/yoonheon051/singularity_analysis.git
 
 # 2. 의존성 설치 (ROS 패키지는 rosdep, Robotics Toolbox 는 pip)
 cd ~/colcon_ws
-rosdep install -i --from-path src --rosdistro humble -y
-pip install -r src/singularity_analysis/requirements.txt
+rosdep install -i --from-path src --rosdistro $ROS_DISTRO -y
+pip install -r src/singularity_analysis/requirements.txt   # 24.04 에서 오류가 나면 아래 안내 참고
 
 # 3. 빌드
 colcon build --packages-select my_robot_description singularity_analysis
@@ -49,8 +55,16 @@ source install/setup.bash
 ros2 launch singularity_analysis analysis.launch.py
 ```
 
+> **Ubuntu 24.04 에서 pip 오류(`externally-managed-environment`)가 나면**: 24.04 부터 시스템 Python 에 바로 pip 설치를 막습니다. 둘 중 하나로 설치하세요.
+> - 가상환경 (권장, ROS 패키지도 보이게 `--system-site-packages`):
+>   `python3 -m venv --system-site-packages ~/sa_venv && source ~/sa_venv/bin/activate && pip install -r src/singularity_analysis/requirements.txt`
+>   → 이후 `colcon build` 와 `ros2 launch` 도 이 가상환경을 켠 터미널에서 실행 (`source ~/sa_venv/bin/activate`)
+> - 간단히: `pip install --break-system-packages -r src/singularity_analysis/requirements.txt`
+
+22.04(Humble)에서 쓰던 워크스페이스를 24.04 로 가져왔다면 `build/`, `install/`, `log/` 를 지우고 다시 빌드하세요(다른 ROS 버전으로 빌드된 결과는 섞어 쓸 수 없음).
+
 관절 슬라이더로 로봇을 움직이면 RViz에 가동성 타원체가 실시간으로 보이고, 결과는 `~/singularity_results/`에 쌓입니다.
-브라우저로 **http://localhost:8080** 을 열면 실시간 대시보드가 보입니다(rosbridge 가 필요하며 2번의 rosdep 이 `ros-humble-rosbridge-suite` 를 설치해 줍니다).
+브라우저로 **http://localhost:8080** 을 열면 실시간 대시보드가 보입니다(rosbridge 가 필요하며 2번의 rosdep 이 `ros-$ROS_DISTRO-rosbridge-suite` 를 설치해 줍니다).
 자세한 실행 옵션은 [전체 실행 순서](#전체-실행-순서)를 보세요.
 
 ## 파일 구성
@@ -502,12 +516,12 @@ ros2 run singularity_analysis velocity_demo --eps 0.1 --lam 0.15   # 감쇠를 �
 ### 1. 설치·빌드 (처음 한 번)
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash          # Ubuntu 22.04 는 humble
 mkdir -p ~/colcon_ws/src && cd ~/colcon_ws/src
 git clone https://github.com/yoonheon051/singularity_analysis.git
 cd ~/colcon_ws
-rosdep install -i --from-path src --rosdistro humble -y
-pip install -r src/singularity_analysis/requirements.txt
+rosdep install -i --from-path src --rosdistro $ROS_DISTRO -y
+pip install -r src/singularity_analysis/requirements.txt   # 24.04: 빠른 시작의 pip 안내 참고
 colcon build --packages-select my_robot_description singularity_analysis
 source install/setup.bash
 ```
@@ -583,7 +597,7 @@ colcon test --packages-select singularity_analysis && colcon test-result --verbo
 | `test_dashboard.py` | 물리량·근접도·도달 예상 시간·벗어나는 방향 계산, 기울기 vs 중앙 차분, 상태 JSON 에 inf 가 없는지, 분석 노드의 `/singularity/status`·빈도 제한·관절 속도(메시지 값/차분 추정), 관절별 위험도·도달 예상 시간(관여 관절만), 로봇팔 그림용 관절 위치·축(순기구학·Jacobian 과 일치, M0609 치수), 실제 로봇 파라미터(관절 토픽·URDF 파일), 대시보드 웹 서버 |
 | `test_toolbox.py` | **실제 Robotics Toolbox**와 교차 검증: fkine·Jacobian이 `ReferenceRobot`과 같은지, 분석 결과가 같은지, 원본 URDF의 끝 링크가 둘(`base`, `tool0`)인지, RG2 xacro가 6축으로 불러와지는지, README의 DLS 숫자가 재현되는지, deprecated 된 `Robot.URDF()`를 부르지 않는지. Toolbox를 불러올 수 없으면 건너뜀 |
 
-**자동 테스트(GitHub Actions)**: push할 때마다 `.github/workflows/test.yml`이 Ubuntu 22.04 + Python 3.10(ROS2 Humble과 같은 환경)에서 Robotics Toolbox까지 설치해 전체 테스트를 돌립니다. 결과는 README 맨 위 배지와 저장소의 **Actions** 탭에서 볼 수 있습니다.
+**자동 테스트(GitHub Actions)**: push할 때마다 `.github/workflows/test.yml`이 **Ubuntu 24.04 + Python 3.12(ROS2 Jazzy와 같은 환경)** 와 **Ubuntu 22.04 + Python 3.10(Humble)** 두 곳에서 Robotics Toolbox까지 설치해 전체 테스트를 돌립니다(ROS 자체는 설치하지 않음). 결과는 README 맨 위 배지와 저장소의 **Actions** 탭에서 볼 수 있습니다.
 
 ## 실시간 대시보드
 
@@ -656,7 +670,9 @@ flowchart LR
 분석은 관절값을 **읽기만** 하고 로봇에 명령을 보내지 않습니다.
 
 ```bash
-# 1. 두산 드라이버 (doosan-robot2, humble) — 처음에는 mode:=virtual(에뮬레이터)로 연습
+# 1. 두산 드라이버 (doosan-robot2) — 처음에는 mode:=virtual(에뮬레이터)로 연습
+#    ROS 버전에 맞는 브랜치로 받아 빌드: git clone -b jazzy https://github.com/DoosanRobotics/doosan-robot2.git
+#    (22.04 는 -b humble). 실행 명령이 다르면 그 브랜치의 README 를 따르세요
 ros2 launch dsr_bringup2 dsr_bringup2_rviz.launch.py mode:=real host:=<제어기 IP> model:=m0609
 
 # 2. 관절 토픽 이름 확인 (보통 /dsr01/joint_states, 관절 이름 joint_1 ~ joint_6)
