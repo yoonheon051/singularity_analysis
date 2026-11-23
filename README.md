@@ -15,6 +15,8 @@ Manipulability / Condition Number 기반으로 Singularity(특이점) 를 분석
 - 특이점 감지
 - CSV 로그 저장
 - 분석 결과 시각화
+- **실시간 웹 대시보드**: 특이점 근접도(%)·물리량·도달 예상 시간·벗어나는 방향 ([실시간 대시보드](#실시간-대시보드))
+- **실제 M0609 연동**: 두산 드라이버의 관절값으로 그대로 분석 ([실제 로봇에서 실행](#실제-로봇에서-실행))
 
 2026.04.24 현재, m0609 6축 로봇팔만 지원합니다. M0609 시뮬레이션(RViz2)용 로봇 모델 패키지 `my_robot_description`도 이 저장소에 함께 들어 있어서, **저장소 하나로 시뮬레이션부터 분석까지** 실행할 수 있습니다. (예전 별도 저장소 [my_robot_description](https://github.com/yoonheon051/my_robot_description)의 내용을 옮겨 왔습니다.)
 
@@ -48,6 +50,7 @@ ros2 launch singularity_analysis analysis.launch.py
 ```
 
 관절 슬라이더로 로봇을 움직이면 RViz에 가동성 타원체가 실시간으로 보이고, 결과는 `~/singularity_results/`에 쌓입니다.
+브라우저로 **http://localhost:8080** 을 열면 실시간 대시보드가 보입니다(rosbridge 가 필요하며 2번의 rosdep 이 `ros-humble-rosbridge-suite` 를 설치해 줍니다).
 자세한 실행 옵션은 [전체 실행 순서](#전체-실행-순서)를 보세요.
 
 ## 파일 구성
@@ -64,13 +67,15 @@ singularity_analysis/                  # 저장소 (~/colcon_ws/src 에 clone)
 └── singularity_analysis/              # [패키지] 특이점 분석 (ament_python)
     ├── launch/analysis.launch.py      #   시뮬레이션 + 분석 한 번에 실행
     ├── rviz/analysis.rviz             #   로봇 모델 + 타원체(MarkerArray) 표시 설정
+    ├── dashboard/index.html           #   실시간 웹 대시보드 (외부 라이브러리 없음)
     ├── singularity_analysis/          #   파이썬 모듈
     │   ├── singularity.py             #     공통 계산: 타원체, 특이점 종류, URDF 정리 (NumPy만 사용)
     │   ├── m0609_ros_analyzer.py      #     실시간 분석 노드        (ros2 run ... analyzer)
     │   ├── calculate_jacobian.py      #     한 자세 분석            (ros2 run ... calculate_jacobian)
     │   ├── plot_ellipsoid.py          #     자세별 타원체 그림      (ros2 run ... plot_ellipsoid)
     │   ├── velocity_demo.py           #     속도 폭주 vs DLS       (ros2 run ... velocity_demo)
-    │   └── visualize_results.py       #     CSV 그래프             (ros2 run ... visualize_results)
+    │   ├── visualize_results.py       #     CSV 그래프             (ros2 run ... visualize_results)
+    │   └── dashboard_server.py        #     대시보드 웹 서버        (ros2 run ... dashboard)
     └── test/                          #   검증 테스트 (ROS 없이 실행, 아래 '테스트' 참고)
 ```
 
@@ -377,6 +382,18 @@ RViz에서 **Add → By topic → `/manipulability_ellipsoid` → MarkerArray** 
 | `/singularity/condition_number` | `std_msgs/Float64` | 조건수 (완전 특이면 inf) |
 | `/singularity/sigma_min` | `std_msgs/Float64` | 최소 특이값 |
 | `/singularity/type` | `std_msgs/String` | `normal` / `wrist` / `elbow` / `shoulder` / 겹치면 `wrist+elbow` |
+| `/singularity/status` | `std_msgs/String` | 대시보드용 종합 상태(JSON, 기본 15 Hz). [실시간 대시보드](#실시간-대시보드) 참고 |
+
+노드 파라미터 (launch 가 알아서 넣어 주므로 직접 쓸 일은 드뭅니다)
+
+| 파라미터 | 기본값 | 설명 |
+|---|---|---|
+| `joint_states_topic` | `/joint_states` | 관절 상태 토픽. 두산 드라이버는 보통 `/dsr01/joint_states` |
+| `robot_description_topic` | `/robot_description` | URDF 를 받을 토픽 |
+| `urdf_file` | (빈 값) | 주면 토픽을 기다리지 않고 이 URDF/xacro 파일로 모델을 만듦 |
+| `status_rate_hz` | `15.0` | `/singularity/status` 발행 빈도 (0 이하면 매 메시지) |
+| `warn_factor` | `3.0` | 근접도 0% 가 되는 지점 = 임계값 × 이 값 |
+| `results_dir` | `~/singularity_results` | CSV 저장 폴더 |
 
 ```
 ros2 run rqt_plot rqt_plot /singularity/manipulability/data /singularity/sigma_min/data
@@ -505,9 +522,14 @@ ros2 launch singularity_analysis analysis.launch.py
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
 | `model:=` | `m0609_rg2` | 로봇 모델. `m0609`(그리퍼 없음) 또는 `m0609_rg2`(RG2 그리퍼 포함) |
-| `gui:=` | `true` | 관절 슬라이더 창. 실제 로봇의 `/joint_states`를 쓸 때는 `false` |
-| `rviz:=` | `true` | RViz (로봇 모델 + 가동성 타원체) |
+| `gui:=` | `true` | 관절 슬라이더 창 (`mode:=real` 이면 항상 끔) |
+| `rviz:=` | sim: `true`, real: `false` | RViz (로봇 모델 + 가동성 타원체) |
 | `results_dir:=` | `~/singularity_results` | CSV 저장 폴더 |
+| `mode:=` | `sim` | `real` 이면 실제 로봇 ([실제 로봇에서 실행](#실제-로봇에서-실행)) |
+| `joint_states_topic:=` | sim: `/joint_states`, real: `/dsr01/joint_states` | 관절 상태 토픽 |
+| `dashboard:=` | `true` | rosbridge + 대시보드 웹 서버 실행 |
+| `dashboard_port:=` / `rosbridge_port:=` | `8080` / `9090` | 웹 페이지 / WebSocket 포트 |
+| `status_rate_hz:=` | `15.0` | 대시보드 갱신 빈도 |
 
 그리퍼 모델이어도 분석은 팔 6축(base_link → link_6)만 대상으로 하고, 관절값은 이름(`joint_1`~`joint_6`)으로 찾습니다.
 로봇 모델만 보려면 `ros2 launch my_robot_description rviz_sim.launch.py`도 그대로 쓸 수 있습니다.
@@ -546,7 +568,7 @@ ros2 run singularity_analysis calculate_jacobian  # 한 자세 분석
 
 ### 8. 테스트
 
-ROS 없이 도는 테스트 26개와, Robotics Toolbox가 있을 때 추가로 도는 교차 검증 14개입니다. Robotics Toolbox 대신, 같은 M0609 URDF로 직접 만든 NumPy 기구학(`test/conftest.py`의 `ReferenceRobot`)을 쓰고, 분석 노드는 가짜 `rclpy`로 처음부터 실행합니다.
+ROS 없이 도는 테스트 53개와, Robotics Toolbox가 있을 때 추가로 도는 교차 검증 14개입니다. Robotics Toolbox 대신, 같은 M0609 URDF로 직접 만든 NumPy 기구학(`test/conftest.py`의 `ReferenceRobot`)을 쓰고, 분석 노드는 가짜 `rclpy`로 처음부터 실행합니다.
 
 ```bash
 python3 -m pytest singularity_analysis/test -v      # 저장소 최상위에서
@@ -558,9 +580,102 @@ colcon test --packages-select singularity_analysis && colcon test-result --verbo
 | `test_singularity.py` | URDF 정리(그리퍼·미믹 관절 제거), Jacobian vs 수치미분, 행렬식 분해, 특이점 분류, 타원체가 해당 종류에서만 납작해지는지, DLS 관절 속도 |
 | `test_analyzer.py` | 분석 노드: 그리퍼 URDF로 6축 모델 생성, 관절을 이름으로 찾기(순서가 섞이고 그리퍼 관절이 있어도), CSV 기록·flush·닫기, 지표 토픽 = CSV, 타원체 마커 위치·색, 종류가 바뀔 때만 경고, 관절 이름 불일치 경고 1회, 잘못된 URDF면 빈 CSV 없이 종료 |
 | `test_scripts.py` | `visualize_results`(새 CSV·예전 CSV+inf, 최신 CSV 고르기), `calculate_jacobian`, `plot_ellipsoid`(기본 4자세가 의도한 종류로 분류), `velocity_demo`가 끝까지 돌고 결과 파일을 남기는지 |
+| `test_dashboard.py` | 물리량·근접도·도달 예상 시간·벗어나는 방향 계산, 기울기 vs 중앙 차분, 상태 JSON 에 inf 가 없는지, 분석 노드의 `/singularity/status`·빈도 제한·관절 속도(메시지 값/차분 추정), 관절별 위험도·도달 예상 시간(관여 관절만), 로봇팔 그림용 관절 위치·축(순기구학·Jacobian 과 일치, M0609 치수), 실제 로봇 파라미터(관절 토픽·URDF 파일), 대시보드 웹 서버 |
 | `test_toolbox.py` | **실제 Robotics Toolbox**와 교차 검증: fkine·Jacobian이 `ReferenceRobot`과 같은지, 분석 결과가 같은지, 원본 URDF의 끝 링크가 둘(`base`, `tool0`)인지, RG2 xacro가 6축으로 불러와지는지, README의 DLS 숫자가 재현되는지, deprecated 된 `Robot.URDF()`를 부르지 않는지. Toolbox를 불러올 수 없으면 건너뜀 |
 
 **자동 테스트(GitHub Actions)**: push할 때마다 `.github/workflows/test.yml`이 Ubuntu 22.04 + Python 3.10(ROS2 Humble과 같은 환경)에서 Robotics Toolbox까지 설치해 전체 테스트를 돌립니다. 결과는 README 맨 위 배지와 저장소의 **Actions** 탭에서 볼 수 있습니다.
+
+## 실시간 대시보드
+
+분석 노드가 `/singularity/status`(JSON)를 발행하면, rosbridge 가 WebSocket(9090)으로 넘기고, 브라우저 페이지(8080)가 그립니다.
+`analysis.launch.py` 가 셋 다 띄우므로 **http://localhost:8080** 만 열면 됩니다. 같은 네트워크의 태블릿·폰에서는 `http://<PC IP>:8080`.
+
+```mermaid
+flowchart LR
+    JS["/joint_states<br/>(슬라이더 또는 실제 로봇)"] --> AN["analyzer"]
+    AN -- "/singularity/status (JSON)" --> RB["rosbridge_websocket :9090"]
+    RB -- WebSocket --> WEB["브라우저 대시보드<br/>http://PC:8080"]
+```
+
+화면은 **관절(J1~J6) 기준**입니다. 분석 코드의 특이점 종류(손목·팔꿈치·어깨)는 화면에서 "어느 관절들의 문제인가"로 바꿔 부릅니다.
+
+- **로봇팔 (맨 위)**: 현재 관절각으로 그린 M0609. 관절은 회전축 방향의 원통으로 그리고, 색은 관절 위험도에 따라 **초록(안전) → 노랑 → 빨강(특이점 근처)**. 벗어나려면 돌릴 관절은 점선 원과 `+`/`−` 로 표시. 드래그로 돌려 보고, 더블클릭하면 처음 시점
+- **전체 위험도**: 안전 / 주의 / 위험 + 0~100%, 가장 위험한 관절과 이유(예: "J4·J6 회전축이 거의 일직선"), "이 속도면 N초 후 임계 도달", 벗어나는 방향
+- **관절 카드 J1~J6**: 각도, 위험도(색·%), 도달 예상 시간. 벗어나려면 돌릴 관절은 빨간 점선 테두리와 "+ 방향으로 돌리면 멀어짐"
+- **최근 30초 관절 위험도 그래프** (마우스를 올리면 값)
+- **위험 조건**: 아래 세 조건의 물리량과 임계값, 근접도
+
+관절 위험도는 그 관절이 걸린 조건의 근접도입니다(`singularity.py`의 `KIND_JOINTS`, `joint_risk`, `joint_eta`). 한 관절이 여러 조건에 걸리면 가장 큰 값을 씁니다.
+
+| 화면 이름 (분석 코드) | 조건 | 물리량 | 색이 바뀌는 관절 |
+|---|---|---|---|
+| J4·J5·J6 (wrist) | det[z₄ z₅ z₆] = 0 | J4·J6 회전축 사이 각 (J5 ≈ 0°) | J4·J5·J6 |
+| J2·J3 (elbow) | c₂ ∥ c₃ | 팔이 다 펴지거나 접히기까지 남은 각 | J2·J3 |
+| J1 (shoulder) | c₁ · n = 0 | 손목 중심 ↔ J1 회전축 거리 | J1 |
+
+### 근접도·물리량
+지표(0이면 특이점)를 사람이 읽기 쉬운 값으로 바꿉니다(`singularity.py`의 `physical_value`, `proximity`).
+
+| 종류 | 물리량 | 임계값 (근접도 100%) | 경고 시작 (근접도 0%) |
+|---|---|---|---|
+| 손목 | 4·6번 축 사이 각 = asin(지표) | 5.7° | 17.5° |
+| 팔꿈치 | c₂·c₃ 사이 각 = asin(지표) (팔이 펴짐/접힘까지 남은 각) | 5.7° | 17.5° |
+| 어깨 | 손목 중심 ↔ 1번 축 거리 ≈ 지표 × 팔 길이 | 3.9 cm | 11.7 cm |
+
+근접도 = (경고 시작 − 지표) / (경고 시작 − 임계값), 0~1 로 자름. 경고 시작 = 임계값 × `warn_factor`(3). 100% 가 곧 기존 특이점 분류(`classify`)의 경계라 CSV 의 `singularity_type` 과 일치합니다.
+
+### 도달 예상 시간과 벗어나는 방향
+지표의 관절 기울기 $\nabla_q s = \partial s / \partial q$ 를 전진 차분으로 구합니다(Jacobian 12번, 대시보드에 발행할 때만).
+- 지표 변화 속도 $\dot{s} = \nabla_q s \cdot \dot{q}$ → 줄어드는 중이면 **도달 예상 시간** = (지표 − 임계값) / $(-\dot{s})$ (30초 이내만 표시)
+- 기울기 성분이 가장 큰 관절과 그 부호 → **벗어나는 방향** (예: 손목 특이점이면 q5 를 지금 부호 쪽으로)
+- $\dot{q}$ 는 `/joint_states` 의 `velocity`(두산 드라이버·ros2_control 은 채워 줌)를 쓰고, 비어 있으면(관절 슬라이더) 직전 메시지와의 차분을 평활해서 추정합니다.
+
+### `/singularity/status` 형식 (요약)
+```
+{
+  "stamp": 1795400000.12, "q": [6개, rad], "qdot": [6개, rad/s] 또는 null,
+  "type": "wrist", "level": "danger", "risk": 1.0, "dominant": "wrist",
+  "manipulability": 0.0012, "condition_number": 270.6, "sigma_min": 0.004,
+  "kinds": {
+    "wrist": {"index": 0.05, "limit": 0.1, "proximity": 1.0, "value": 2.9, "unit": "deg",
+              "value_limit": 5.7, "value_warn": 17.5, "rate": -0.09, "eta": null,
+              "escape": {"joint": 5, "direction": 1}},
+    "elbow": {...}, "shoulder": {...}
+  },
+  "joint_risk": [0, 0, 0, 1.0, 1.0, 1.0],
+  "geometry": {"base": [0, 0, 0], "joints": [[x, y, z] × 6], "axes": [[ax, ay, az] × 6]}
+}
+```
+완전 특이점에서 조건수가 inf 이면 `null` 로 보냅니다(브라우저 JSON 은 Infinity 를 못 읽음).
+`joint_risk` 는 관절 J1~J6 의 위험도(0~1), `geometry` 는 로봇팔 그림용 관절 원점 위치(m, base 좌표계)와 회전축 단위벡터입니다(순기구학은 분석 노드가 계산하므로 브라우저는 그리기만 함).
+
+대시보드만 따로 띄우려면 `ros2 run singularity_analysis dashboard --port 8080` (rosbridge 는 `ros2 launch rosbridge_server rosbridge_websocket_launch.xml`). rosbridge 주소가 다르면 `http://PC:8080/?ws=ws://192.168.0.10:9090`.
+
+## 실제 로봇에서 실행
+
+분석은 관절값을 **읽기만** 하고 로봇에 명령을 보내지 않습니다.
+
+```bash
+# 1. 두산 드라이버 (doosan-robot2, humble) — 처음에는 mode:=virtual(에뮬레이터)로 연습
+ros2 launch dsr_bringup2 dsr_bringup2_rviz.launch.py mode:=real host:=<제어기 IP> model:=m0609
+
+# 2. 관절 토픽 이름 확인 (보통 /dsr01/joint_states, 관절 이름 joint_1 ~ joint_6)
+ros2 topic list | grep joint_states
+ros2 topic echo --once /dsr01/joint_states
+
+# 3. 분석 + 대시보드
+ros2 launch singularity_analysis analysis.launch.py mode:=real
+#    토픽이 다르면: ... mode:=real joint_states_topic:=/joint_states
+```
+
+`mode:=real` 에서는
+- 관절 슬라이더와 이 패키지의 robot_state_publisher·RViz 를 띄우지 않습니다(드라이버가 모델·/tf·RViz 를 맡음). 타원체를 보려면 드라이버의 RViz 에서 **Add → By topic → `/manipulability_ellipsoid`**.
+- 분석 모델은 `my_robot_description/urdf/<model>.urdf.xacro` 파일에서 직접 읽습니다(`urdf_file` 파라미터).
+- 그리퍼(RG2)를 달아도 특이점 판정(det J)은 기준점 위치와 무관해 그대로입니다. 단, 말단 선속도 타원체·가동성 값은 기준점에 따라 달라집니다.
+
+실제 로봇으로 움직인 기록은 `ros2 bag record /dsr01/joint_states` 로 남겨 두면, 나중에 `ros2 bag play` + `mode:=real` 로 로봇 없이 대시보드를 다시 볼 수 있습니다.
+
+> 확인이 필요한 점: 드라이버의 토픽·관절 이름은 버전에 따라 다를 수 있으니 2번에서 꼭 확인하세요. 또 드라이버의 M0609 모델과 `my_robot_description` 의 치수가 같은지도 한 번 비교해 보는 것이 좋습니다.
 
 ## 분석 흐름
 
@@ -570,9 +685,10 @@ colcon test --packages-select singularity_analysis && colcon test-result --verbo
 flowchart LR
     SIM["analysis.launch.py<br/>robot_state_publisher · 관절 슬라이더<br/>(my_robot_description 모델)"] -- "/robot_description (URDF)" --> AN["m0609_ros_analyzer.py<br/>팔 6축만 남겨 모델 생성"]
     SIM -- "/joint_states" --> AN
-    REAL["실제 로봇 (선택)"] -. "/joint_states" .-> AN
+    REAL["실제 로봇 (mode:=real)<br/>두산 드라이버"] -. "/dsr01/joint_states" .-> AN
     AN -- "행마다 기록" --> CSV[("~/singularity_results/<br/>analysis_날짜_시각.csv")]
     AN -- "/singularity/* 토픽" --> RQT["rqt_plot"]
+    AN -- "/singularity/status" --> DASH["rosbridge → 웹 대시보드"]
     URDF --> VD["velocity_demo.py<br/>속도 폭주 vs DLS"]
     CSV --> VIS["visualize_results.py"]
     VIS --> PNG[("..._plot.png")]

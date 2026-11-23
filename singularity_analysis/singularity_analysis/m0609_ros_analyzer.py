@@ -6,7 +6,9 @@ from rclpy.qos import QoSProfile, DurabilityPolicy
 from visualization_msgs.msg import Marker, MarkerArray
 import numpy as np
 import csv
+import json
 import os
+import time
 from datetime import datetime
 
 try:                                  # ros2 run / launch 로 실행할 때 (패키지)
@@ -37,6 +39,9 @@ METRIC_TOPICS = {
     'sigma_min': '/singularity/sigma_min',
 }
 TYPE_TOPIC = '/singularity/type'   # 'normal' / 'wrist' / 'elbow' / 'shoulder' / 'wrist+elbow' ...
+# 대시보드용 종합 상태 (std_msgs/String 에 JSON). 지표·물리량·근접도·도달 예상 시간·벗어나는 방향을 한 메시지로
+STATUS_TOPIC = '/singularity/status'
+QDOT_SMOOTHING = 0.3   # 관절 속도를 차분으로 추정할 때의 지수 평활 계수 (/joint_states 에 velocity 가 없을 때)
 CSV_FLUSH_SEC = 1.0                # CSV 를 디스크에 내보내는 간격 (매 메시지마다 파일을 열고 닫지 않음)
 
 class M0609SingularityMonitor(Node):
@@ -59,15 +64,38 @@ class M0609SingularityMonitor(Node):
         self._missing_warned = False   # 관절 이름이 안 맞을 때 경고를 한 번만 출력
         self._last_type = 'normal'     # 특이점 종류가 바뀔 때만 알리기 위함
 
+        # 실제 로봇 연동용 파라미터
+        # - joint_states_topic: 두산 드라이버(doosan-robot2)는 보통 /dsr01/joint_states 로 발행
+        # - robot_description_topic: URDF 를 받을 토픽
+        # - urdf_file: 주면 토픽을 기다리지 않고 이 파일(URDF/xacro)로 모델을 만든다 (실제 로봇에서 편함)
+        # - status_rate_hz: /singularity/status 발행 빈도 (0 이하이면 /joint_states 마다)
+        self.joint_states_topic = self.declare_parameter('joint_states_topic', '/joint_states').value
+        description_topic = self.declare_parameter('robot_description_topic', '/robot_description').value
+        urdf_file = self.declare_parameter('urdf_file', '').value
+        self.status_period = self._period(self.declare_parameter('status_rate_hz', 15.0).value)
+        self.warn_factor = float(self.declare_parameter('warn_factor', sg.WARN_FACTOR).value)
+        self._last_status = None       # 마지막으로 상태를 발행한 시각 (time.monotonic)
+        self._prev_q = None            # 관절 속도 추정용 직전 관절각과 시각
+        self._qdot = None
+
         # 2. 로봇 모델 정보(URDF) 수신을 위한 설정
         # Transient Local: 노드가 늦게 켜져도 이전에 발행된 토픽 데이터를 받아올 수 있도록 설정(Latch 방식)
-        self.get_logger().info('URDF 데이터를 /robot_description 토픽에서 기다리는 중...')
         qos_profile = QoSProfile(depth=1)
         qos_profile.durability = DurabilityPolicy.TRANSIENT_LOCAL
 
         self.urdf_xml = None
-        # /robot_description 토픽을 통해 로봇의 구조 정보(URDF)를 수신
-        self.subscription = self.create_subscription(String, '/robot_description', self.urdf_callback, qos_profile)
+        if urdf_file:
+            # 파일에서 바로 읽음 (실제 로봇: 드라이버가 robot_description 을 다른 이름으로 발행해도 상관없음)
+            path = os.path.expanduser(urdf_file)
+            if not os.path.isfile(path):
+                self.get_logger().error(f'URDF 파일이 없습니다: {path}')
+                raise RuntimeError(f'URDF 파일이 없습니다: {path}')
+            self.urdf_xml = sg.read_urdf(path)
+            self.get_logger().info(f'URDF 파일에서 모델을 읽습니다: {path}')
+        else:
+            self.get_logger().info(f'URDF 데이터를 {description_topic} 토픽에서 기다리는 중...')
+            # 로봇의 구조 정보(URDF)를 토픽으로 수신
+            self.subscription = self.create_subscription(String, description_topic, self.urdf_callback, qos_profile)
 
         # URDF 데이터를 수신할 때까지 노드 실행을 잠시 대기(모델이 있어야 계산 가능)
         while self.urdf_xml is None:
@@ -102,6 +130,7 @@ class M0609SingularityMonitor(Node):
         # 지표 토픽 (rqt_plot 실시간 그래프, 다른 노드에서 경고에 활용)
         self.metric_pubs = {k: self.create_publisher(Float64, topic, 10) for k, topic in METRIC_TOPICS.items()}
         self.type_pub = self.create_publisher(String, TYPE_TOPIC, 10)
+        self.status_pub = self.create_publisher(String, STATUS_TOPIC, 10)
 
         # CSV 를 열고, 주기적으로 디스크에 내보냄 (끌 때는 destroy_node 에서 마지막으로 내보내고 닫음)
         self.init_csv()
@@ -109,8 +138,13 @@ class M0609SingularityMonitor(Node):
         self.create_timer(CSV_FLUSH_SEC, self.flush_csv)
 
         # 실시간 관절 각도 데이터를 수신하기 위해 /joint_states 토픽 구독
-        self.create_subscription(JointState, '/joint_states', self.joint_callback, 10)
-        self.get_logger().info(f'모니터링 시작! (DOF: {self.dof})')
+        self.create_subscription(JointState, self.joint_states_topic, self.joint_callback, 10)
+        self.get_logger().info(f'모니터링 시작! (DOF: {self.dof}, 관절 토픽: {self.joint_states_topic})')
+
+    @staticmethod
+    def _period(rate_hz):
+        rate_hz = float(rate_hz)
+        return 0.0 if rate_hz <= 0 else 1.0 / rate_hz
 
     def init_csv(self):
         # 이번 실행용 CSV 파일을 열어 두고 헤더(열 이름)를 씀.
@@ -154,6 +188,7 @@ class M0609SingularityMonitor(Node):
             # 3. 데이터 개수가 모델 DoF와 일치할 때만 수학적 연산 진행
             if len(q) == self.dof:
                 q_np = np.array(q)
+                qdot = self._joint_velocity(msg, joint_map, q_np)
                 # 기구학 지표 계산 (singularity.py):
                 # - Jacobian(J): 관절 속도와 말단 속도 사이의 선형 매핑 행렬 (말단 link_6, 6x6)
                 # - Manipulability(w) = sqrt(det(J·Jᵀ)): 0에 가까우면 특이점
@@ -178,9 +213,48 @@ class M0609SingularityMonitor(Node):
                 self.save_to_csv(q_np, a, kind)
                 self.publish_metrics(a, kind)
                 self.publish_ellipsoids(q_np, a)
+                self.publish_status(q_np, qdot, a)
 
         except Exception as e:
             self.get_logger().error(f'데이터 처리 중 오류 발생: {str(e)}')
+
+    def _joint_velocity(self, msg, joint_map, q):
+        """관절 속도(rad/s). /joint_states 에 velocity 가 있으면(두산 드라이버·ros2_control) 그대로,
+        없으면(관절 슬라이더) 직전 메시지와의 차분을 지수 평활해서 추정. 아직 모르면 None."""
+        velocity = getattr(msg, 'velocity', None)
+        if velocity is not None and len(velocity) == len(msg.name):
+            vmap = dict(zip(msg.name, velocity))
+            if all(name in vmap for name in JOINT_NAMES):
+                self._qdot = np.array([vmap[name] for name in JOINT_NAMES], dtype=float)
+                return self._qdot
+        now = time.monotonic()
+        if self._prev_q is not None:
+            dt = now - self._prev_q[1]
+            if dt > 0.5:                 # 오래 끊겼다가 다시 들어오면 속도를 처음부터 다시 추정
+                self._qdot = None
+            elif dt > 1e-4:
+                raw = (q - self._prev_q[0]) / dt
+                self._qdot = raw if self._qdot is None else (
+                    QDOT_SMOOTHING * raw + (1 - QDOT_SMOOTHING) * self._qdot)
+        self._prev_q = (q.copy(), now)
+        return self._qdot
+
+    def publish_status(self, q, qdot, a):
+        """대시보드용 종합 상태를 JSON 으로 발행 (status_rate_hz 로 빈도 제한).
+        기울기(∂지표/∂q) 계산에 Jacobian 이 12번 더, 로봇팔 그림에 순기구학이 6번 필요하므로, 발행할 때만 계산한다."""
+        now = time.monotonic()
+        if self._last_status is not None and now - self._last_status < self.status_period:
+            return
+        self._last_status = now
+        grad = None
+        if self.wrist is not None:
+            grad = sg.index_gradient(self.robot, q, end=self.end, wrist=self.wrist, base=a['indices'])
+        geometry = sg.arm_geometry(self.robot, q, J=a['J'])   # 대시보드의 로봇팔 그림용 관절 위치·축
+        status = sg.build_status(a, q, qdot=qdot, grad=grad, stamp=time.time(), warn_factor=self.warn_factor,
+                                 geometry=geometry)
+        msg = String()
+        msg.data = json.dumps(status, allow_nan=False)
+        self.status_pub.publish(msg)
 
     @staticmethod
     def _fmt_indices(a):

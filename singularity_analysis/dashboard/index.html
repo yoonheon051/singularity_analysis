@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M0609 특이점 모니터</title>
+<!--
+  실시간 특이점 대시보드
+  - 분석 노드(analyzer)가 발행하는 /singularity/status (std_msgs/String, JSON) 를 rosbridge(WebSocket)로 받아 그린다.
+  - 외부 라이브러리 없이 rosbridge 프로토콜을 직접 사용 → 인터넷이 없는 실습실에서도 동작
+  - 접속 주소: 기본 ws://<이 페이지를 연 호스트>:9090, 바꾸려면 ?ws=ws://192.168.0.10:9090
+-->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --track: #f0efec;
+  --s-wrist: #2a78d6;
+  --s-elbow: #eb6834;
+  --s-shoulder: #1baf7a;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --critical: #d03b3b;
+  --good-ink: #006300;
+  --warning-ink: #8a5a00;
+  --critical-ink: #b02a2a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --track: #2c2c2a;
+    --s-wrist: #3987e5;
+    --s-elbow: #d95926;
+    --s-shoulder: #199e70;
+    --good-ink: #0ca30c;
+    --warning-ink: #fab219;
+    --critical-ink: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #f0efec;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --track: #2c2c2a;
+  --s-wrist: #3987e5;
+  --s-elbow: #d95926;
+  --s-shoulder: #199e70;
+  --good-ink: #0ca30c;
+  --warning-ink: #fab219;
+  --critical-ink: #e66767;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 40px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 16px; }
+header h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+.conn { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--ink-2); font-size: 13px; }
+.conn input {
+  width: 220px; max-width: 46vw; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink); font: inherit;
+}
+.conn button, .themebtn {
+  padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--ink); font: inherit; cursor: pointer;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.on { background: var(--good); }
+.dot.stale { background: var(--warning); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+}
+.grid { display: grid; gap: 12px; }
+.top { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.jcards { grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: 12px; }
+.bottom { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); margin-top: 12px; }
+@media (max-width: 1000px) { .jcards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 860px) {
+  .top, .bottom { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 620px) {
+  .jcards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .conn { margin-left: 0; width: 100%; }
+  .conn input { flex: 1; max-width: none; }
+}
+.label { color: var(--ink-2); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
+.muted { color: var(--muted); }
+
+/* 로봇팔 */
+.armcard { display: flex; flex-direction: column; gap: 6px; }
+.armhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.ramp { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.ramp i { display: inline-block; width: 120px; height: 8px; border-radius: 4px; }
+.armbox { position: relative; }
+#arm { display: block; width: 100%; height: 340px; cursor: grab; touch-action: none; user-select: none; }
+#arm.drag { cursor: grabbing; }
+#arm text { font-size: 12px; font-weight: 700; fill: var(--ink); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+.armnote { position: absolute; left: 0; bottom: 0; font-size: 11px; color: var(--muted); pointer-events: none; }
+.armempty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; pointer-events: none; }
+.armempty[hidden] { display: none; }
+#arm { height: 400px; }
+@media (max-width: 620px) { #arm { height: 300px; } }
+
+/* 전체 상태 */
+.hero { display: flex; flex-direction: column; gap: 10px; }
+.badge {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+  padding: 3px 10px 3px 8px; border-radius: 999px; font-weight: 650; font-size: 13px;
+  background: var(--track); color: var(--ink-2);
+}
+.badge svg { width: 14px; height: 14px; }
+.badge.safe { color: var(--good-ink); }
+.badge.caution { color: var(--warning-ink); }
+.badge.danger { color: var(--critical-ink); }
+.big { font-size: 56px; font-weight: 650; line-height: 1; letter-spacing: -0.02em; }
+.big small { font-size: 22px; font-weight: 600; color: var(--ink-2); margin-left: 2px; }
+.hero .sub { color: var(--ink-2); min-height: 21px; }
+.hero .eta { font-weight: 650; color: var(--critical-ink); min-height: 21px; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
+.stats .v { font-size: 15px; font-weight: 600; }
+
+/* 관절 카드 J1~J6 */
+.jcard { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; position: relative; }
+.jcard .head { display: flex; align-items: center; gap: 6px; }
+.jcard .jdot { width: 10px; height: 10px; border-radius: 50%; background: var(--good); flex: none; }
+.jcard .name { font-weight: 700; font-size: 15px; }
+.jcard .state { margin-left: auto; font-size: 12px; font-weight: 650; }
+.jcard .angle { font-size: 26px; font-weight: 650; line-height: 1.1; }
+.jcard .foot { font-size: 12px; color: var(--ink-2); min-height: 34px; display: flex; flex-direction: column; gap: 1px; }
+.jcard .foot .warn { color: var(--critical-ink); font-weight: 650; }
+.jcard.hint { border: 2px dashed var(--critical); padding: 11px 13px; }
+.jcard .esc { color: var(--critical-ink); font-weight: 650; }
+.meter { position: relative; height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
+.meter i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 4px; background: var(--good); transition: width 120ms linear; }
+.meterrow { display: flex; align-items: center; gap: 8px; }
+.meterrow .meter { flex: 1; }
+.meterrow .pct { width: 40px; text-align: right; font-weight: 650; font-size: 13px; }
+
+/* 위험 조건 */
+.conds { display: flex; flex-direction: column; gap: 12px; }
+.cond .ch { display: flex; align-items: baseline; gap: 8px; }
+.cond .cn { font-weight: 700; display: inline-flex; align-items: center; gap: 6px; }
+.cond .cn i { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+.cond .cv { margin-left: auto; font-weight: 650; }
+.cond .cw { font-size: 12px; color: var(--ink-2); margin: 2px 0 4px; }
+.cond .ce { font-size: 12px; color: var(--critical-ink); font-weight: 650; }
+
+/* 시간 그래프 */
+.chart-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 8px; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 12px; height: 2px; border-radius: 1px; display: inline-block; }
+.chartbox { position: relative; }
+#chart { display: block; width: 100%; height: 240px; touch-action: none; }
+#chart text { font-size: 11px; fill: var(--muted); }
+.tip {
+  position: absolute; pointer-events: none; display: none; min-width: 150px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+.tip .row { display: flex; align-items: center; gap: 6px; }
+.tip .row i { width: 8px; height: 8px; border-radius: 2px; }
+.tip .row b { margin-left: auto; padding-left: 12px; }
+
+.note { margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+.empty {
+  margin-bottom: 12px; padding: 10px 14px; border-radius: 10px; border: 1px dashed var(--axis);
+  color: var(--ink-2); font-size: 13px;
+}
+.empty code { font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>M0609 특이점 모니터</h1>
+    <div class="conn">
+      <span class="dot" id="dot"></span>
+      <span id="connText">연결 안 됨</span>
+      <input id="wsUrl" aria-label="rosbridge 주소" spellcheck="false">
+      <button id="reconnect">연결</button>
+      <button class="themebtn" id="theme" title="밝게/어둡게">◐</button>
+    </div>
+  </header>
+
+  <div class="empty" id="empty">
+    <code>/singularity/status</code> 를 기다리는 중입니다. 분석 노드와 rosbridge 가 켜져 있는지 확인하세요
+    (<code>ros2 launch singularity_analysis analysis.launch.py</code>).
+  </div>
+
+  <div class="grid top">
+    <section class="card armcard">
+      <div class="armhead">
+        <div class="label">로봇팔 (관절 색 = 관절 위험도)</div>
+        <div class="ramp"><span>안전</span><i id="ramp"></i><span>위험</span></div>
+      </div>
+      <div class="armbox">
+        <svg id="arm" role="img" aria-label="현재 관절각으로 그린 M0609 로봇팔"></svg>
+        <div class="armempty" id="armEmpty">관절 데이터를 기다리는 중</div>
+        <div class="armnote">드래그: 돌려 보기 · 더블클릭: 처음 시점 · 점선 원: 벗어나려면 돌릴 관절</div>
+      </div>
+    </section>
+    <section class="card hero" aria-live="polite">
+      <div class="label">전체 위험도</div>
+      <span class="badge" id="badge"></span>
+      <div class="big" id="risk">–<small>%</small></div>
+      <div class="sub" id="dominant"></div>
+      <div class="sub" id="reason"></div>
+      <div class="eta" id="heroEta"></div>
+      <div class="sub" id="heroEsc"></div>
+      <div class="stats">
+        <div><div class="label">가동성 w</div><div class="v" id="manip">–</div></div>
+        <div><div class="label">조건수</div><div class="v" id="cond">–</div></div>
+        <div><div class="label">σ<sub>min</sub></div><div class="v" id="smin">–</div></div>
+      </div>
+    </section>
+  </div>
+  <div class="grid jcards" id="jcards"></div>
+
+  <div class="grid bottom">
+    <section class="card">
+      <div class="chart-head">
+        <div class="label">최근 30초 관절 위험도</div>
+        <div class="legend" id="legend"></div>
+      </div>
+      <div class="chartbox">
+        <svg id="chart" role="img" aria-label="관절 그룹별 위험도 시간 그래프"></svg>
+        <div class="tip" id="tip"></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="label" style="margin-bottom:10px">위험 조건</div>
+      <div class="conds" id="conds"></div>
+      <div class="note">조건이 임계값에 닿으면 해당 관절이 빨강(100%)이 됩니다. 한 관절이 여러 조건에 걸리면 가장 큰 값을 씁니다.</div>
+    </section>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const TOPIC = '/singularity/status';
+  const WINDOW_SEC = 30;      // 그래프에 보이는 시간
+  const STALE_SEC = 1.5;      // 이 시간 동안 새 메시지가 없으면 '끊김'
+  // 분석 노드의 특이점 종류(wrist/elbow/shoulder)를 화면에서는 관절 기준으로 부른다
+  const KINDS = [
+    { key: 'wrist', joints: 'J4·J5·J6', what: 'J4·J6 회전축 사이 각', reason: 'J4·J6 회전축이 거의 일직선 (J5 가 0°에 가까움)', color: '--s-wrist' },
+    { key: 'elbow', joints: 'J2·J3', what: '팔이 다 펴지거나 접히기까지 남은 각', reason: 'J2–J3 팔이 거의 다 펴지거나 접힘', color: '--s-elbow' },
+    { key: 'shoulder', joints: 'J1', what: '손목 중심 ↔ J1 회전축 거리', reason: '손목 중심이 J1 회전축 위에 가까워짐', color: '--s-shoulder' },
+  ];
+  const UNIT = { deg: '°', cm: 'cm' };
+  const LEVEL = {
+    safe: { text: '안전', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>' },
+    caution: { text: '주의', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2l6.5 12h-13z"/><path d="M8 7v3M8 12v.5"/></svg>' },
+    danger: { text: '위험', icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="6"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5"/></svg>' },
+  };
+  const $ = (id) => document.getElementById(id);
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // ---------------------------------------------------------------- 화면 뼈대
+  $('jcards').innerHTML = [1, 2, 3, 4, 5, 6].map((j) => `
+    <section class="card jcard" id="j${j}">
+      <div class="head"><span class="jdot"></span><span class="name">J${j}</span><span class="state"></span></div>
+      <div class="angle">–</div>
+      <div class="meterrow"><div class="meter"><i></i></div><span class="pct">–</span></div>
+      <div class="foot"><span class="eta"></span><span class="esc"></span></div>
+    </section>`).join('');
+  $('legend').innerHTML = KINDS.map((k) => `<span><i style="background:var(${k.color})"></i>${k.joints}</span>`).join('');
+  $('conds').innerHTML = KINDS.map((k) => `
+    <div class="cond" id="c-${k.key}">
+      <div class="ch"><span class="cn"><i style="background:var(${k.color})"></i>${k.joints}</span><span class="cv">–</span></div>
+      <div class="cw">${k.what}</div>
+      <div class="meterrow"><div class="meter"><i></i></div><span class="pct">–</span></div>
+      <div class="ce"></div>
+    </div>`).join('');
+
+  // ---------------------------------------------------------------- 표시 도우미
+  const fmt = (v, d = 1) => (v === null || v === undefined || !isFinite(v) ? '–' : Number(v).toFixed(d));
+  const fmtSci = (v) => {
+    if (v === null || v === undefined) return '∞';
+    if (v !== 0 && (Math.abs(v) < 0.01 || Math.abs(v) >= 1e4)) return v.toExponential(1);
+    return v.toFixed(Math.abs(v) < 1 ? 4 : 1);
+  };
+  const levelOfProx = (p) => (p >= 1 ? 'danger' : p > 0 ? 'caution' : 'safe');
+  const levelInk = (lv) => (lv === 'danger' ? 'var(--critical-ink)' : lv === 'caution' ? 'var(--warning-ink)' : 'var(--good-ink)');
+  const deg = (r) => (r * 180) / Math.PI;
+
+  // ---------------------------------------------------------------- 상태 반영
+  let last = null;
+  let lastRx = 0;
+  const history = [];   // {t, wrist, elbow, shoulder}  (근접도 %)
+
+  function render(s) {
+    last = s;
+    $('empty').hidden = true;
+
+    const lv = s.level || 'safe';
+    const badge = $('badge');
+    badge.className = 'badge ' + lv;
+    badge.innerHTML = LEVEL[lv].icon + LEVEL[lv].text;
+    $('risk').innerHTML = (s.risk === null ? '–' : Math.round(s.risk * 100)) + '<small>%</small>';
+
+    const dom = KINDS.find((k) => k.key === s.dominant);
+    const active = dom && s.risk > 0;
+    $('dominant').textContent = active ? `가장 위험한 관절: ${dom.joints}` : '모든 관절이 특이점에서 충분히 떨어져 있습니다';
+    $('reason').textContent = active ? dom.reason : '';
+    const etas = KINDS.map((k) => s.kinds[k.key] && s.kinds[k.key].eta !== null ? [k, s.kinds[k.key].eta] : null)
+      .filter(Boolean).sort((a, b) => a[1] - b[1]);
+    $('heroEta').textContent = lv !== 'danger' && etas.length ? `이 속도면 ${etas[0][1].toFixed(1)}초 후 ${etas[0][0].joints} 임계 도달` : '';
+    const esc = active && s.kinds[dom.key] ? s.kinds[dom.key].escape : null;
+    $('heroEsc').textContent = esc ? `벗어나기: J${esc.joint} 를 ${esc.direction > 0 ? '+' : '−'} 방향으로` : '';
+
+    $('manip').textContent = fmtSci(s.manipulability);
+    $('cond').textContent = s.condition_number === null ? '∞' : fmtSci(s.condition_number);
+    $('smin').textContent = fmtSci(s.sigma_min);
+
+    // 관절 카드: 각도, 위험도(색·%), 도달 예상 시간, 벗어나기 표시
+    const jr = s.joint_risk || [0, 0, 0, 0, 0, 0];
+    const je = s.joint_eta || [null, null, null, null, null, null];
+    s.q.forEach((q, i) => {
+      const el = $('j' + (i + 1));
+      const p = jr[i] || 0, jc = riskColor(p), lvj = levelOfProx(p);
+      el.querySelector('.jdot').style.background = jc;
+      const st = el.querySelector('.state');
+      st.textContent = LEVEL[lvj].text;
+      st.style.color = levelInk(lvj);
+      el.querySelector('.angle').textContent = fmt(deg(q)) + '°';
+      const bar = el.querySelector('.meter i');
+      bar.style.width = (p * 100).toFixed(1) + '%';
+      bar.style.background = jc;
+      el.querySelector('.pct').textContent = Math.round(p * 100) + '%';
+      const showEta = je[i] !== null && lvj !== 'danger';
+      const eta = el.querySelector('.eta');
+      eta.className = 'eta' + (showEta ? ' warn' : '');
+      eta.textContent = showEta ? `${je[i].toFixed(1)}초 후 임계` : '';
+      const hit = esc && esc.joint === i + 1;
+      el.classList.toggle('hint', !!hit);
+      el.querySelector('.esc').textContent = hit ? `${esc.direction > 0 ? '+' : '−'} 방향으로 돌리면 멀어짐` : '';
+    });
+
+    // 위험 조건 (관절 그룹별 물리량)
+    for (const k of KINDS) {
+      const d = s.kinds[k.key];
+      const el = $('c-' + k.key);
+      if (!d) { el.querySelector('.cv').textContent = '–'; continue; }
+      const u = UNIT[d.unit] || d.unit;
+      el.querySelector('.cv').innerHTML = `${fmt(d.value)}${u} <span class="muted" style="font-weight:400;font-size:12px">/ 임계 ${fmt(d.value_limit)}${u}</span>`;
+      const bar = el.querySelector('.meter i');
+      bar.style.width = (d.proximity * 100).toFixed(1) + '%';
+      bar.style.background = riskColor(d.proximity);
+      el.querySelector('.pct').textContent = Math.round(d.proximity * 100) + '%';
+      el.querySelector('.ce').textContent = d.eta !== null && d.proximity < 1 ? `${d.eta.toFixed(1)}초 후 임계 도달` : '';
+    }
+
+    drawArm();
+
+    const t = s.stamp || Date.now() / 1000;
+    const point = { t };
+    for (const k of KINDS) point[k.key] = s.kinds[k.key] ? s.kinds[k.key].proximity * 100 : null;
+    history.push(point);
+    while (history.length && history[0].t < t - WINDOW_SEC - 2) history.shift();
+    scheduleChart();
+  }
+
+  // ---------------------------------------------------------------- 위험도 색 (초록 → 노랑 → 빨강)
+  // 0% 초록(--good), 50% 노랑(--warning), 100% 빨강(--critical). 중간색이 탁해지지 않게 OKLab 에서 섞는다.
+  const toLin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const toSrgb = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+  function hexToOklab(hex) {
+    const n = parseInt(hex.replace('#', ''), 16);
+    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => toLin(v / 255));
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+      1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+      0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+  }
+  function oklabToCss([L, A, B]) {
+    const l = (L + 0.3963377774 * A + 0.2158037573 * B) ** 3;
+    const m = (L - 0.1055613458 * A - 0.0638541728 * B) ** 3;
+    const s = (L - 0.0894841775 * A - 1.2914855480 * B) ** 3;
+    const rgb = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+      -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s];
+    return 'rgb(' + rgb.map((v) => Math.round(255 * Math.min(1, Math.max(0, toSrgb(v))))).join(',') + ')';
+  }
+  let RAMP = null;
+  function riskColor(p) {
+    if (!RAMP) RAMP = ['--good', '--warning', '--critical'].map((v) => hexToOklab(css(v)));
+    p = Math.min(1, Math.max(0, p || 0));
+    const [a, b, t] = p <= 0.5 ? [RAMP[0], RAMP[1], p / 0.5] : [RAMP[1], RAMP[2], (p - 0.5) / 0.5];
+    return oklabToCss(a.map((v, i) => v + (b[i] - v) * t));
+  }
+  $('ramp').style.background = `linear-gradient(90deg, ${[0, 0.25, 0.5, 0.75, 1].map(riskColor).join(',')})`;
+
+  // ---------------------------------------------------------------- 로봇팔 (SVG, 정사영 3D)
+  // 분석 노드가 보낸 관절 위치·회전축(status.geometry)으로 그린다. 각 관절은 회전축 방향의 원통(캡슐)이라
+  // J1·J2, J4·J5 처럼 원점이 겹쳐도 축 방향이 달라 구분된다.
+  const armSvg = $('arm');
+  const VIEW0 = { az: (-35 * Math.PI) / 180, el: (18 * Math.PI) / 180 };
+  const view = { ...VIEW0 };
+  const VIEW_CENTER = [0, 0, 0.48];    // 화면 가운데에 올 점 (m). 팔을 다 펴면 높이 약 1.03 m 라 고정 배율로 그림
+  const VIEW_SPAN = 1.3;               // 화면 짧은 변에 담을 길이 (m)
+  // 관절 원통: 반지름 r, 원점에서 축 방향으로 반쪽 길이 h (m) — M0609 모양에 맞춘 그림용 값
+  const JOINT_SHAPE = [
+    { r: 0.060, h: 0.020 }, { r: 0.058, h: 0.040 }, { r: 0.050, h: 0.035 },
+    { r: 0.044, h: 0.030 }, { r: 0.044, h: 0.028 }, { r: 0.038, h: 0.012 },
+  ];
+  const v3 = {
+    add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+    sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+    mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
+    dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+    len: (a) => Math.hypot(a[0], a[1], a[2]),
+  };
+
+  function drawArm() {
+    const g = last && last.geometry;
+    $('armEmpty').hidden = !!g;
+    const W = armSvg.clientWidth || 600, H = armSvg.clientHeight || 340;
+    armSvg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    if (!g) { armSvg.innerHTML = ''; return; }
+
+    const S = Math.min(W, H) / VIEW_SPAN;
+    const ca = Math.cos(view.az), sa = Math.sin(view.az), ce = Math.cos(view.el), se = Math.sin(view.el);
+    const P = (p) => {
+      const x = p[0] - VIEW_CENTER[0], y = p[1] - VIEW_CENTER[1], z = p[2] - VIEW_CENTER[2];
+      const d = -sa * x + ca * y;
+      return { x: W / 2 + (ca * x + sa * y) * S, y: H / 2 - (ce * z + se * d) * S, depth: ce * d - se * z };
+    };
+    const ink = css('--ink-2'), linkFill = css('--axis'), surface = css('--surface');
+    const items = [];   // {depth, svg}  — 먼 것부터 그림
+    const capsule = (a, b, width, fill, outline) => {
+      const pa = P(a), pb = P(b);
+      const seg = `x1="${pa.x.toFixed(1)}" y1="${pa.y.toFixed(1)}" x2="${pb.x.toFixed(1)}" y2="${pb.y.toFixed(1)}"`;
+      items.push({
+        depth: (pa.depth + pb.depth) / 2,
+        svg: `<line ${seg} stroke="${outline}" stroke-width="${(width * S + 3).toFixed(1)}" stroke-linecap="round"/>` +
+             `<line ${seg} stroke="${fill}" stroke-width="${(width * S).toFixed(1)}" stroke-linecap="round"/>`,
+      });
+    };
+
+    // 바닥 격자와 받침
+    let ground = '';
+    for (let v = -0.6; v <= 0.601; v += 0.2) {
+      const a = P([v, -0.6, 0]), b = P([v, 0.6, 0]), c = P([-0.6, v, 0]), d = P([0.6, v, 0]);
+      ground += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${css('--grid')}"/>`;
+      ground += `<line x1="${c.x}" y1="${c.y}" x2="${d.x}" y2="${d.y}" stroke="${css('--grid')}"/>`;
+    }
+    const plate = [];
+    for (let k = 0; k < 32; k++) {
+      const t = (k / 32) * 2 * Math.PI, p = P([0.11 * Math.cos(t), 0.11 * Math.sin(t), 0]);
+      plate.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+    }
+    ground += `<polygon points="${plate.join(' ')}" fill="${css('--track')}" stroke="${ink}" stroke-width="1.5"/>`;
+
+    // 링크: 받침 → J1 → J2 → J3 → 손목 중심(J4·J5) → J6 → 플랜지
+    const J = g.joints, A = g.axes;
+    const chain = [g.base, J[0], J[1], J[2], J[4], J[5]];
+    const widths = [0.09, 0.09, 0.075, 0.06, 0.05];
+    for (let i = 0; i < chain.length - 1; i++) {
+      if (v3.len(v3.sub(chain[i + 1], chain[i])) > 1e-3) capsule(chain[i], chain[i + 1], widths[i], linkFill, ink);
+    }
+    const toolDir = v3.sub(J[5], J[4]);
+    const tl = v3.len(toolDir);
+    if (tl > 1e-3) capsule(J[5], v3.add(J[5], v3.mul(toolDir, 0.06 / tl)), 0.05, linkFill, ink);
+
+    // 관절 원통 (위험도 색)
+    const jr = last.joint_risk || [0, 0, 0, 0, 0, 0];
+    const centers = [];
+    for (let i = 0; i < 6; i++) {
+      const { r, h } = JOINT_SHAPE[i];
+      const axis = A[i];
+      const prev = i === 0 ? g.base : J[i - 1];
+      const d = v3.sub(J[i], prev), dl = v3.len(d);
+      let c = J[i];
+      // 원통 축이 앞 링크와 나란하면(J1·J4·J6) 원점에서 앞 관절 쪽으로 물려 그려 옆 관절과 겹치지 않게
+      if (dl > 0.01 && Math.abs(v3.dot(axis, d) / dl) > 0.7) c = v3.sub(J[i], v3.mul(d, (h + r) / dl));
+      capsule(v3.sub(c, v3.mul(axis, h)), v3.add(c, v3.mul(axis, h)), 2 * r, riskColor(jr[i]), ink);
+      centers.push({ p: P(c), r: r * S });
+    }
+
+    items.sort((a, b) => b.depth - a.depth);
+    let out = ground + items.map((it) => it.svg).join('');
+
+    // 벗어나는 관절 표시 + 이름표 (항상 맨 위)
+    const dom = last.dominant && last.risk > 0 && last.kinds[last.dominant];
+    const esc = dom ? dom.escape : null;
+    const cx = centers.reduce((s, c) => s + c.p.x, 0) / 6, cy = centers.reduce((s, c) => s + c.p.y, 0) / 6;
+    const placed = [];
+    centers.forEach((c, i) => {
+      if (esc && esc.joint === i + 1) {
+        out += `<circle cx="${c.p.x.toFixed(1)}" cy="${c.p.y.toFixed(1)}" r="${(c.r + 9).toFixed(1)}" fill="none" ` +
+               `stroke="${css('--critical')}" stroke-width="2" stroke-dasharray="5 4"/>`;
+      }
+      // 이름표: 팔 무게중심에서 바깥쪽으로. 앞서 놓은 이름표와 겹치면 옆으로 비켜 놓는다 (J1·J2, J4·J5 는 위치가 거의 같음)
+      let dx = c.p.x - cx, dy = c.p.y - cy;
+      const n = Math.hypot(dx, dy);
+      [dx, dy] = n > 1 ? [dx / n, dy / n] : [1, 0];
+      const label = `J${i + 1}` + (esc && esc.joint === i + 1 ? (esc.direction > 0 ? ' +' : ' −') : '');
+      const k = c.r + 16;
+      let lx = c.p.x + dx * k, ly = c.p.y + dy * k;
+      for (let tries = 0; tries < 8 && placed.some((p) => Math.abs(p[0] - lx) < 34 && Math.abs(p[1] - ly) < 17); tries++) {
+        // 바깥 방향에 수직으로 번갈아 비켜 놓기
+        const side = tries % 2 === 0 ? 1 : -1, step = 18 * (Math.floor(tries / 2) + 1);
+        lx = c.p.x + dx * k - dy * step * side;
+        ly = c.p.y + dy * k + dx * step * side;
+      }
+      placed.push([lx, ly]);
+      out += `<text x="${lx.toFixed(1)}" y="${(ly + 4).toFixed(1)}" text-anchor="middle">${label}</text>`;
+    });
+    armSvg.innerHTML = out;
+  }
+
+  // 드래그로 시점 돌리기, 더블클릭으로 처음 시점
+  let dragFrom = null;
+  armSvg.addEventListener('pointerdown', (e) => {
+    dragFrom = { x: e.clientX, y: e.clientY, az: view.az, el: view.el };
+    armSvg.setPointerCapture(e.pointerId);
+    armSvg.classList.add('drag');
+  });
+  armSvg.addEventListener('pointermove', (e) => {
+    if (!dragFrom) return;
+    view.az = dragFrom.az - (e.clientX - dragFrom.x) * 0.01;
+    view.el = Math.max(-0.2, Math.min(1.45, dragFrom.el + (e.clientY - dragFrom.y) * 0.01));
+    drawArm();
+  });
+  const endDrag = () => { dragFrom = null; armSvg.classList.remove('drag'); };
+  armSvg.addEventListener('pointerup', endDrag);
+  armSvg.addEventListener('pointercancel', endDrag);
+  armSvg.addEventListener('dblclick', () => { Object.assign(view, VIEW0); drawArm(); });
+  window.addEventListener('resize', drawArm);
+
+  // ---------------------------------------------------------------- 시간 그래프 (SVG)
+  const svg = $('chart');
+  const tip = $('tip');
+  const M = { l: 40, r: 12, t: 22, b: 24 };
+  let hoverX = null;
+  let pending = false;
+  function scheduleChart() {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => { pending = false; drawChart(); });
+  }
+
+  function drawChart() {
+    const W = svg.clientWidth || 600, H = svg.clientHeight || 240;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    const pw = W - M.l - M.r, ph = H - M.t - M.b;
+    const tEnd = history.length ? history[history.length - 1].t : Date.now() / 1000;
+    const tStart = tEnd - WINDOW_SEC;
+    const x = (t) => M.l + ((t - tStart) / WINDOW_SEC) * pw;
+    const y = (p) => M.t + (1 - p / 100) * ph;
+    let out = '';
+    for (const p of [0, 25, 50, 75, 100]) {
+      const yy = y(p).toFixed(1);
+      out += `<line x1="${M.l}" x2="${W - M.r}" y1="${yy}" y2="${yy}" stroke="${p === 0 ? css('--axis') : css('--grid')}" stroke-width="1"/>`;
+      out += `<text x="${M.l - 6}" y="${(+yy + 4).toFixed(1)}" text-anchor="end">${p}%</text>`;
+    }
+    out += `<text x="${W - M.r}" y="${y(100) - 7}" text-anchor="end" style="fill:${css('--critical-ink')}">임계(특이점 근처)</text>`;
+    for (let s = 0; s <= WINDOW_SEC; s += 10) {
+      out += `<text x="${x(tEnd - s).toFixed(1)}" y="${H - 6}" text-anchor="middle">${s === 0 ? '지금' : `-${s}s`}</text>`;
+    }
+    const pts = history.filter((h) => h.t >= tStart);
+    for (const k of KINDS) {
+      let d = '', pen = false;
+      for (const h of pts) {
+        if (h[k.key] === null) { pen = false; continue; }
+        d += `${pen ? 'L' : 'M'}${x(h.t).toFixed(1)},${y(h[k.key]).toFixed(1)}`;
+        pen = true;
+      }
+      if (d) out += `<path d="${d}" fill="none" stroke="${css(k.color)}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    }
+    // 크로스헤어
+    if (hoverX !== null && pts.length) {
+      const tHover = tStart + ((hoverX - M.l) / pw) * WINDOW_SEC;
+      let best = pts[0];
+      for (const h of pts) if (Math.abs(h.t - tHover) < Math.abs(best.t - tHover)) best = h;
+      const bx = x(best.t);
+      out += `<line x1="${bx}" x2="${bx}" y1="${M.t}" y2="${M.t + ph}" stroke="${css('--muted')}" stroke-width="1"/>`;
+      for (const k of KINDS) {
+        if (best[k.key] === null) continue;
+        out += `<circle cx="${bx}" cy="${y(best[k.key])}" r="4" fill="${css(k.color)}" stroke="${css('--surface')}" stroke-width="2"/>`;
+      }
+      tip.innerHTML = `<div class="muted" style="margin-bottom:4px">${(best.t - tEnd).toFixed(1)}s</div>` +
+        KINDS.map((k) => `<div class="row"><i style="background:var(${k.color})"></i>${k.joints}<b>${best[k.key] === null ? '–' : best[k.key].toFixed(0) + '%'}</b></div>`).join('');
+      tip.style.display = 'block';
+      const left = bx + 12 + 160 > W ? bx - 12 - tip.offsetWidth : bx + 12;
+      tip.style.left = left + 'px';
+      tip.style.top = M.t + 'px';
+    } else {
+      tip.style.display = 'none';
+    }
+    svg.innerHTML = out;
+  }
+  svg.addEventListener('pointermove', (e) => {
+    const r = svg.getBoundingClientRect();
+    const px = e.clientX - r.left;
+    hoverX = px >= M.l && px <= r.width - M.r ? px : null;
+    scheduleChart();
+  });
+  svg.addEventListener('pointerleave', () => { hoverX = null; scheduleChart(); });
+  window.addEventListener('resize', scheduleChart);
+
+  // ---------------------------------------------------------------- rosbridge 연결
+  const params = new URLSearchParams(location.search);
+  const defaultUrl = params.get('ws') || `ws://${location.hostname || 'localhost'}:9090`;
+  $('wsUrl').value = defaultUrl;
+  let ws = null, retry = null;
+  let rxCount = 0, rxRate = 0;
+
+  function setConn(state, text) {
+    $('dot').className = 'dot' + (state === 'on' ? ' on' : state === 'stale' ? ' stale' : '');
+    $('connText').textContent = text;
+  }
+
+  function connect() {
+    clearTimeout(retry);
+    if (ws) { ws.onclose = null; ws.close(); }
+    const url = $('wsUrl').value.trim();
+    setConn('off', '연결 중…');
+    try { ws = new WebSocket(url); } catch (e) { setConn('off', '주소 오류'); return; }
+    ws.onopen = () => {
+      setConn('stale', '연결됨 · 데이터 대기');
+      ws.send(JSON.stringify({ op: 'subscribe', id: 'dash', topic: TOPIC, type: 'std_msgs/msg/String' }));
+    };
+    ws.onmessage = (ev) => {
+      let m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.op !== 'publish' || m.topic !== TOPIC) return;
+      try { render(JSON.parse(m.msg.data)); lastRx = performance.now(); rxCount++; } catch (e) { console.error(e); }
+    };
+    ws.onclose = () => {
+      setConn('off', '연결 끊김 · 다시 시도 중');
+      retry = setTimeout(connect, 2000);
+    };
+  }
+  $('reconnect').addEventListener('click', connect);
+  $('wsUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+
+  // 메시지 수신 빈도 표시와 끊김 감지
+  setInterval(() => { rxRate = rxCount; rxCount = 0; }, 1000);
+  setInterval(() => {
+    if (!ws || ws.readyState !== 1) return;
+    const age = (performance.now() - lastRx) / 1000;
+    if (lastRx && age < STALE_SEC) setConn('on', `수신 중 · ${rxRate} Hz`);
+    else if (lastRx) setConn('stale', `${age.toFixed(0)}초째 데이터 없음`);
+  }, 250);
+
+  // 밝게/어둡게 (이 브라우저에만 기억)
+  $('theme').addEventListener('click', () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+    try { localStorage.setItem('theme', root.dataset.theme); } catch (e) { /* 저장 불가 환경 */ }
+    scheduleChart();
+    drawArm();
+  });
+  try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* 무시 */ }
+
+  connect();
+  drawChart();
+})();
+</script>
+</body>
+</html>

@@ -21,6 +21,8 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
+  <!-- 실시간 대시보드: 브라우저가 WebSocket 으로 /singularity/status 를 받음 -->
+  <exec_depend>rosbridge_server</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-matplotlib</exec_depend>
   <exec_depend>python3-pandas</exec_depend>

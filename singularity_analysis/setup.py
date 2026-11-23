@@ -13,6 +13,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/rviz', glob('rviz/*.rviz')),
+        ('share/' + package_name + '/dashboard', glob('dashboard/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -29,6 +30,7 @@ setup(
             'plot_ellipsoid = singularity_analysis.plot_ellipsoid:main',
             'velocity_demo = singularity_analysis.velocity_demo:main',
             'visualize_results = singularity_analysis.visualize_results:main',
+            'dashboard = singularity_analysis.dashboard_server:main',
         ],
     },
 )
