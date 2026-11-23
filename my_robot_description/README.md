@@ -1,11 +1,9 @@
 # 🐊 my_robot_description
 
-이 패키지는 **두산로보틱스 M0609** 로봇 팔과 **OnRobot RG2** 그리퍼를 통합하여 ROS 2 Humble 환경에서 시뮬레이션하기 위한 패키지입니다.
+이 패키지는 **두산로보틱스 M0609** 로봇 팔과 **OnRobot RG2** 그리퍼를 통합하여 ROS 2 환경(RViz2)에서 시각화·시뮬레이션하기 위한 패키지입니다.
 
 ## 요구사항
-ubuntu 22.04
-
-ROS2 Humble
+Ubuntu 24.04 + ROS2 Jazzy, 또는 Ubuntu 22.04 + ROS2 Humble
 
 ## 패키지 구성 요소 
 **`urdf/`**: 로봇과 그리퍼의 결합 구조를 정의하는 Xacro 파일들이 포함되어 있습니다. 
@@ -21,19 +19,18 @@ ROS2 Humble
 # 패키지 리스트 업데이트
 sudo apt update
 
-# 개별 패키지 설치 (Humble 기준)
+# 개별 패키지 설치 ($ROS_DISTRO = jazzy 또는 humble, ROS 를 source 하면 자동 설정)
 # 로봇 상태(TF) 발행 및 GUI 조인트 제어 도구
-sudo apt install ros-humble-robot-state-publisher
-sudo apt install ros-humble-joint-state-publisher-gui
+sudo apt install ros-$ROS_DISTRO-robot-state-publisher
+sudo apt install ros-$ROS_DISTRO-joint-state-publisher-gui
 
-# 시각화 도구 RViz2
-sudo apt install ros-humble-rviz2
+# 시각화 도구 RViz2, 로봇 모델 처리 xacro
+sudo apt install ros-$ROS_DISTRO-rviz2
+sudo apt install ros-$ROS_DISTRO-xacro
 
-# Gazebo 시뮬레이션 연동 패키지
+# (선택, Humble 전용) Gazebo Classic 연동 — Jazzy 에는 이 패키지가 없음(Gazebo Classic 지원 종료).
+# RViz 시각화와 특이점 분석에는 필요 없습니다.
 sudo apt install ros-humble-gazebo-ros-pkgs
-
-# (선택 사항) 로봇 기구학 계산에 필요한 xacro 및 가제보 제어기
-sudo apt install ros-humble-xacro
 sudo apt install ros-humble-gazebo-ros2-control
 
 # 워크스페이스 이동

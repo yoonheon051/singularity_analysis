@@ -1,4 +1,5 @@
-# push 할 때마다 테스트 실행 (Ubuntu 22.04 + Python 3.10 = ROS2 Humble 과 같은 환경)
+# push 할 때마다 테스트 실행 — ROS2 두 버전과 같은 OS·Python 조합에서
+#   Ubuntu 24.04 + Python 3.12 = ROS2 Jazzy,  Ubuntu 22.04 + Python 3.10 = ROS2 Humble
 # ROS 없이 도는 테스트 전부 + 실제 Robotics Toolbox 교차 검증(test_toolbox.py)
 name: tests
 
@@ -9,15 +10,24 @@ on:
 
 jobs:
   pytest:
-    runs-on: ubuntu-22.04
+    name: pytest (${{ matrix.ros }} · Ubuntu ${{ matrix.ubuntu }} · Python ${{ matrix.python }})
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false      # 한쪽이 실패해도 다른 쪽 결과를 끝까지 봄
+      matrix:
+        include:
+          - { ros: jazzy, ubuntu: '24.04', python: '3.12' }
+          - { ros: humble, ubuntu: '22.04', python: '3.10' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ matrix.python }}
       - name: Install dependencies
         run: |
           pip install -r requirements.txt pytest pytest-github-actions-annotate-failures
           pip install xacro || echo "xacro 를 설치하지 못해 그리퍼 xacro 테스트는 건너뜁니다"
+      - name: Show versions
+        run: python -c "import sys, numpy, roboticstoolbox as rtb; print(sys.version); print('numpy', numpy.__version__, '/ roboticstoolbox', rtb.__version__)"
       - name: Run tests
         run: python -m pytest singularity_analysis/test -v -rs
