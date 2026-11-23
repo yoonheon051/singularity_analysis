@@ -34,37 +34,28 @@ GitHub Actions 가 두 조합(22.04 + Python 3.10, 24.04 + Python 3.12) 모두�
 
 ## 빠른 시작
 
-```bash
-# 0. ROS 환경 (Ubuntu 24.04 는 jazzy, 22.04 는 humble)
-source /opt/ros/jazzy/setup.bash
+ROS2(Ubuntu 24.04 는 Jazzy, 22.04 는 Humble)가 설치되어 있으면:
 
-# 1. 워크스페이스에 받기
+```bash
+# 처음 한 번: 받기 → 설치·빌드 (sudo 비밀번호를 물을 수 있음)
 mkdir -p ~/colcon_ws/src && cd ~/colcon_ws/src
 git clone https://github.com/yoonheon051/singularity_analysis.git
+./singularity_analysis/setup.sh
 
-# 2. 의존성 설치 (ROS 패키지는 rosdep, Robotics Toolbox 는 pip)
-cd ~/colcon_ws
-rosdep install -i --from-path src --rosdistro $ROS_DISTRO -y
-pip install -r src/singularity_analysis/requirements.txt   # 24.04 에서 오류가 나면 아래 안내 참고
-
-# 3. 빌드
-colcon build --packages-select my_robot_description singularity_analysis
-source install/setup.bash
-
-# 4. 실행: 로봇 모델 + 관절 슬라이더 + RViz(타원체 표시) + 분석 노드
+# 실행 (새 터미널마다 env.sh 먼저)
+source ~/colcon_ws/env.sh
 ros2 launch singularity_analysis analysis.launch.py
 ```
 
-> **Ubuntu 24.04 에서 pip 오류(`externally-managed-environment`)가 나면**: 24.04 부터 시스템 Python 에 바로 pip 설치를 막습니다. 둘 중 하나로 설치하세요.
-> - 가상환경 (권장, ROS 패키지도 보이게 `--system-site-packages`):
->   `python3 -m venv --system-site-packages ~/sa_venv && source ~/sa_venv/bin/activate && pip install -r src/singularity_analysis/requirements.txt`
->   → 이후 `colcon build` 와 `ros2 launch` 도 이 가상환경을 켠 터미널에서 실행 (`source ~/sa_venv/bin/activate`)
-> - 간단히: `pip install --break-system-packages -r src/singularity_analysis/requirements.txt`
+`setup.sh` 가 ROS 버전 찾기, ROS 의존성(rosdep), Robotics Toolbox 설치, 빌드를 한 번에 하고, 마지막에 실행 환경을 한 번에 켜는 `~/colcon_ws/env.sh` 를 만듭니다.
+- Robotics Toolbox 는 워크스페이스 가상환경(`~/colcon_ws/.venv`)에 설치합니다. Ubuntu 24.04 의 pip 설치 제한(`externally-managed-environment`)을 피하고, 시스템 Python 을 건드리지 않습니다.
+- 22.04(Humble)에서 빌드한 워크스페이스를 24.04 로 가져와도, 다른 ROS 버전의 빌드 결과를 알아서 지우고 다시 빌드합니다.
+- 코드를 받아 새로 고친 뒤(`git pull`)에도 `./singularity_analysis/setup.sh` 를 다시 실행하면 됩니다.
 
-22.04(Humble)에서 쓰던 워크스페이스를 24.04 로 가져왔다면 `build/`, `install/`, `log/` 를 지우고 다시 빌드하세요(다른 ROS 버전으로 빌드된 결과는 섞어 쓸 수 없음).
+매번 `source` 하기 귀찮으면 `echo 'source ~/colcon_ws/env.sh' >> ~/.bashrc`.
 
 관절 슬라이더로 로봇을 움직이면 RViz에 가동성 타원체가 실시간으로 보이고, 결과는 `~/singularity_results/`에 쌓입니다.
-브라우저로 **http://localhost:8080** 을 열면 실시간 대시보드가 보입니다(rosbridge 가 필요하며 2번의 rosdep 이 `ros-$ROS_DISTRO-rosbridge-suite` 를 설치해 줍니다).
+브라우저로 **http://localhost:8080** 을 열면 실시간 대시보드가 보입니다(필요한 rosbridge 는 `setup.sh` 가 설치).
 자세한 실행 옵션은 [전체 실행 순서](#전체-실행-순서)를 보세요.
 
 ## 파일 구성
@@ -73,6 +64,7 @@ ros2 launch singularity_analysis analysis.launch.py
 ```
 singularity_analysis/                  # 저장소 (~/colcon_ws/src 에 clone)
 ├── README.md, requirements.txt, docs/ # 설명, pip 의존성, README 예시 그림
+├── setup.sh                           # 설치·빌드 한 번에 (ROS 버전 감지, rosdep, 가상환경, 빌드, env.sh)
 ├── my_robot_description/              # [패키지] M0609·RG2 로봇 모델 (ament_cmake)
 │   ├── urdf/                          #   m0609.urdf.xacro (팔만), m0609_rg2.urdf.xacro (RG2 그리퍼 포함)
 │   ├── meshes/                        #   RViz 표시용 3D 모델
@@ -515,17 +507,24 @@ ros2 run singularity_analysis velocity_demo --eps 0.1 --lam 0.15   # 감쇠를 �
 
 ### 1. 설치·빌드 (처음 한 번)
 
+[빠른 시작](#빠른-시작)의 `setup.sh` 를 쓰면 됩니다. 스크립트 없이 직접 하려면 아래와 같습니다(`setup.sh` 가 하는 일과 같음).
+
 ```bash
 source /opt/ros/jazzy/setup.bash          # Ubuntu 22.04 는 humble
-mkdir -p ~/colcon_ws/src && cd ~/colcon_ws/src
-git clone https://github.com/yoonheon051/singularity_analysis.git
 cd ~/colcon_ws
-rosdep install -i --from-path src --rosdistro $ROS_DISTRO -y
-pip install -r src/singularity_analysis/requirements.txt   # 24.04: 빠른 시작의 pip 안내 참고
-colcon build --packages-select my_robot_description singularity_analysis
+rosdep install -i -y --from-paths src/singularity_analysis --rosdistro $ROS_DISTRO
+
+# Robotics Toolbox: 워크스페이스 가상환경에 (ROS·apt 패키지도 보이게 --system-site-packages)
+sudo apt install python3-venv
+python3 -m venv --system-site-packages .venv && touch .venv/COLCON_IGNORE
+.venv/bin/pip install -r src/singularity_analysis/requirements.txt "numpy<2"   # apt 패키지·ROS 가 NumPy 1.x 용이라 2 가 섞이면 안 됨
+
+colcon build --packages-up-to singularity_analysis
 source install/setup.bash
+# ros2 run/launch 로 띄운 노드는 시스템 python3 로 실행되므로 가상환경 패키지 경로를 직접 넣어 줌
+export PYTHONPATH="$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])'):$PYTHONPATH"
 ```
-코드를 고친 뒤에는 `colcon build --packages-select singularity_analysis --symlink-install`로 다시 빌드합니다(`--symlink-install`이면 이후 파이썬 수정은 다시 빌드하지 않아도 반영됩니다).
+가상환경을 `activate` 만 하고 빌드·실행하면, colcon 이 만든 노드가 시스템 `python3` 로 실행되어 Robotics Toolbox 를 찾지 못합니다. 그래서 마지막 줄처럼 `PYTHONPATH` 를 넣어야 하고, `env.sh` 가 이 일을 합니다.
 
 ### 2. 시뮬레이션 + 분석 실행
 
@@ -597,7 +596,7 @@ colcon test --packages-select singularity_analysis && colcon test-result --verbo
 | `test_dashboard.py` | 물리량·근접도·도달 예상 시간·벗어나는 방향 계산, 기울기 vs 중앙 차분, 상태 JSON 에 inf 가 없는지, 분석 노드의 `/singularity/status`·빈도 제한·관절 속도(메시지 값/차분 추정), 관절별 위험도·도달 예상 시간(관여 관절만), 로봇팔 그림용 관절 위치·축(순기구학·Jacobian 과 일치, M0609 치수), 실제 로봇 파라미터(관절 토픽·URDF 파일), 대시보드 웹 서버 |
 | `test_toolbox.py` | **실제 Robotics Toolbox**와 교차 검증: fkine·Jacobian이 `ReferenceRobot`과 같은지, 분석 결과가 같은지, 원본 URDF의 끝 링크가 둘(`base`, `tool0`)인지, RG2 xacro가 6축으로 불러와지는지, README의 DLS 숫자가 재현되는지, deprecated 된 `Robot.URDF()`를 부르지 않는지. Toolbox를 불러올 수 없으면 건너뜀 |
 
-**자동 테스트(GitHub Actions)**: push할 때마다 `.github/workflows/test.yml`이 **Ubuntu 24.04 + Python 3.12(ROS2 Jazzy와 같은 환경)** 와 **Ubuntu 22.04 + Python 3.10(Humble)** 두 곳에서 Robotics Toolbox까지 설치해 전체 테스트를 돌립니다(ROS 자체는 설치하지 않음). 결과는 README 맨 위 배지와 저장소의 **Actions** 탭에서 볼 수 있습니다.
+**자동 테스트(GitHub Actions)**: push할 때마다 `.github/workflows/test.yml`이 **Ubuntu 24.04 + Python 3.12(ROS2 Jazzy와 같은 환경)** 와 **Ubuntu 22.04 + Python 3.10(Humble)** 두 곳에서 Robotics Toolbox까지 설치해 전체 테스트를 돌립니다. 또 공식 ROS 컨테이너(`ros:jazzy`, `ros:humble`)에서 `setup.sh` 로 설치·빌드한 뒤 `analysis.launch.py mode:=real` 을 실제로 띄워, 분석 노드가 `/singularity/status` 를 내고 대시보드(8080)·rosbridge(9090)가 뜨는지 확인합니다(`.github/scripts/ros_smoke_test.sh`). 결과는 README 맨 위 배지와 저장소의 **Actions** 탭에서 볼 수 있습니다.
 
 ## 실시간 대시보드
 
@@ -679,7 +678,8 @@ ros2 launch dsr_bringup2 dsr_bringup2_rviz.launch.py mode:=real host:=<제어기
 ros2 topic list | grep joint_states
 ros2 topic echo --once /dsr01/joint_states
 
-# 3. 분석 + 대시보드
+# 3. 분석 + 대시보드 (다른 터미널. 드라이버를 다른 워크스페이스에 빌드했다면 그 install/setup.bash 도 source)
+source ~/colcon_ws/env.sh
 ros2 launch singularity_analysis analysis.launch.py mode:=real
 #    토픽이 다르면: ... mode:=real joint_states_topic:=/joint_states
 ```

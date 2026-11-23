@@ -1,6 +1,7 @@
 # push 할 때마다 테스트 실행 — ROS2 두 버전과 같은 OS·Python 조합에서
 #   Ubuntu 24.04 + Python 3.12 = ROS2 Jazzy,  Ubuntu 22.04 + Python 3.10 = ROS2 Humble
-# ROS 없이 도는 테스트 전부 + 실제 Robotics Toolbox 교차 검증(test_toolbox.py)
+# - pytest:    ROS 없이 도는 테스트 전부 + 실제 Robotics Toolbox 교차 검증(test_toolbox.py)
+# - ros-build: 공식 ROS 컨테이너에서 setup.sh 로 설치·빌드하고, launch 를 띄워 실제로 동작하는지 확인
 name: tests
 
 on:
@@ -31,3 +32,30 @@ jobs:
         run: python -c "import sys, numpy, roboticstoolbox as rtb; print(sys.version); print('numpy', numpy.__version__, '/ roboticstoolbox', rtb.__version__)"
       - name: Run tests
         run: python -m pytest singularity_analysis/test -v -rs
+
+  ros-build:
+    name: setup.sh + launch (${{ matrix.ros }})
+    runs-on: ubuntu-latest
+    container: ros:${{ matrix.ros }}     # jazzy = Ubuntu 24.04, humble = Ubuntu 22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ros: [jazzy, humble]
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: 셸 스크립트 검사 (shellcheck)
+        run: |
+          apt-get update -qq && apt-get install -y -qq shellcheck >/dev/null
+          shellcheck -S warning setup.sh .github/scripts/*.sh
+      - name: setup.sh (사용자와 같은 방식으로 ~/colcon_ws/src 에 두고 실행)
+        run: |
+          mkdir -p ~/colcon_ws/src
+          cp -r "$GITHUB_WORKSPACE" ~/colcon_ws/src/singularity_analysis
+          ~/colcon_ws/src/singularity_analysis/setup.sh
+      - name: launch 실행 확인 (분석 노드 · 대시보드 · rosbridge)
+        run: ~/colcon_ws/src/singularity_analysis/.github/scripts/ros_smoke_test.sh ~/colcon_ws
