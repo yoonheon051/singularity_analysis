@@ -74,7 +74,10 @@ if [[ ! -x "$VENV/bin/python" ]]; then
   fi
 fi
 touch "$VENV/COLCON_IGNORE"   # colcon 이 가상환경 안을 패키지로 뒤지지 않게
-"$VENV/bin/python" -m pip install -q -r "$REPO_DIR/requirements.txt"
+# numpy<2: apt 로 깐 matplotlib·scipy 와 ROS 메시지 라이브러리는 NumPy 1.x 로 빌드되어 있어서,
+# 가상환경에 NumPy 2 가 들어가 앞을 가리면 import 하다 죽는다. (Robotics Toolbox 1.5 는 pgraph-python 1.0 을 통해
+# NumPy 2 를 요구하므로, 이 조건이면 pip 가 NumPy 1.x 와 맞는 Toolbox 1.4.x 를 고른다)
+"$VENV/bin/python" -m pip install -q -r "$REPO_DIR/requirements.txt" "numpy<2"
 
 # ---------------------------------------------------------------- 4. 빌드
 step "4/5 빌드"

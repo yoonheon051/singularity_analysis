@@ -517,7 +517,7 @@ rosdep install -i -y --from-paths src/singularity_analysis --rosdistro $ROS_DIST
 # Robotics Toolbox: 워크스페이스 가상환경에 (ROS·apt 패키지도 보이게 --system-site-packages)
 sudo apt install python3-venv
 python3 -m venv --system-site-packages .venv && touch .venv/COLCON_IGNORE
-.venv/bin/pip install -r src/singularity_analysis/requirements.txt
+.venv/bin/pip install -r src/singularity_analysis/requirements.txt "numpy<2"   # apt 패키지·ROS 가 NumPy 1.x 용이라 2 가 섞이면 안 됨
 
 colcon build --packages-up-to singularity_analysis
 source install/setup.bash
