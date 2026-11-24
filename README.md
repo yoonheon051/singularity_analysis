@@ -596,7 +596,7 @@ colcon test --packages-select singularity_analysis && colcon test-result --verbo
 | `test_dashboard.py` | 물리량·근접도·도달 예상 시간·벗어나는 방향 계산, 기울기 vs 중앙 차분, 상태 JSON 에 inf 가 없는지, 분석 노드의 `/singularity/status`·빈도 제한·관절 속도(메시지 값/차분 추정), 관절별 위험도·도달 예상 시간(관여 관절만), 로봇팔 그림용 관절 위치·축(순기구학·Jacobian 과 일치, M0609 치수), 실제 로봇 파라미터(관절 토픽·URDF 파일), 대시보드 웹 서버 |
 | `test_toolbox.py` | **실제 Robotics Toolbox**와 교차 검증: fkine·Jacobian이 `ReferenceRobot`과 같은지, 분석 결과가 같은지, 원본 URDF의 끝 링크가 둘(`base`, `tool0`)인지, RG2 xacro가 6축으로 불러와지는지, README의 DLS 숫자가 재현되는지, deprecated 된 `Robot.URDF()`를 부르지 않는지. Toolbox를 불러올 수 없으면 건너뜀 |
 
-**자동 테스트(GitHub Actions)**: push할 때마다 `.github/workflows/test.yml`이 **Ubuntu 24.04 + Python 3.12(ROS2 Jazzy와 같은 환경)** 와 **Ubuntu 22.04 + Python 3.10(Humble)** 두 곳에서 Robotics Toolbox까지 설치해 전체 테스트를 돌립니다. 또 공식 ROS 컨테이너(`ros:jazzy`, `ros:humble`)에서 `setup.sh` 로 설치·빌드한 뒤 `analysis.launch.py mode:=real` 을 실제로 띄워, 분석 노드가 `/singularity/status` 를 내고 대시보드(8080)·rosbridge(9090)가 뜨는지 확인합니다(`.github/scripts/ros_smoke_test.sh`). 결과는 README 맨 위 배지와 저장소의 **Actions** 탭에서 볼 수 있습니다.
+**자동 테스트(GitHub Actions)**: push할 때마다 `.github/workflows/test.yml`이 **Ubuntu 24.04 + Python 3.12(ROS2 Jazzy와 같은 환경)** 와 **Ubuntu 22.04 + Python 3.10(Humble)** 두 곳에서 Robotics Toolbox까지 설치해 전체 테스트를 돌립니다. 또 PR 과 main 머지 때는 공식 ROS 컨테이너(`ros:jazzy`, `ros:humble`)에서 `setup.sh` 로 설치·빌드한 뒤 `analysis.launch.py mode:=real` 을 실제로 띄워, 분석 노드가 `/singularity/status` 를 내고 대시보드(8080)·rosbridge(9090)가 뜨는지 확인합니다(`.github/scripts/ros_smoke_test.sh`). 결과는 README 맨 위 배지와 저장소의 **Actions** 탭에서 볼 수 있습니다.
 
 ## 실시간 대시보드
 
