@@ -10,7 +10,7 @@ try:                                  # ros2 run / 패키지로 설치했을 때
 except ImportError:                   # python3 파일경로로 직접 실행할 때
     import singularity as sg
 
-# Jacobian을 계산할 말단 링크 (특이점 분석 대상인 팔 끝, 자세한 설명은 README '말단 링크를 link_6으로 지정하는 이유')
+# Jacobian을 계산할 말단 링크 (특이점 분석 대상인 팔 끝, 자세한 설명은 docs/theory.md '말단 링크를 link_6 으로 지정하는 이유')
 END_LINK = sg.END_LINK
 
 

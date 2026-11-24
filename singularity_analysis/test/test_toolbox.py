@@ -60,7 +60,7 @@ def test_analysis_matches_reference(toolbox_robot, reference, q):
 
 
 def test_raw_urdf_has_ambiguous_end_effector():
-    """README '말단 링크를 link_6으로 지정하는 이유'의 근거: 원본 URDF 를 그대로 불러오면 끝 링크가 둘(base, tool0)"""
+    """docs/theory.md '말단 링크를 link_6 으로 지정하는 이유'의 근거: 원본 URDF 를 그대로 불러오면 끝 링크가 둘(base, tool0)"""
     from singularity_analysis.calculate_jacobian import toolbox_robot_from_file
     raw = toolbox_robot_from_file(URDF)
     names = [link.name for link in raw.ee_links]
@@ -75,7 +75,7 @@ def test_gripper_xacro_loads_as_six_joints():
 
 
 def test_velocity_demo_numbers(toolbox_robot):
-    """README 'DLS' 표의 숫자가 실제 Toolbox 로도 나오는지"""
+    """README·docs/theory.md 'DLS' 표의 숫자가 실제 Toolbox 로도 나오는지"""
     pytest.importorskip('matplotlib')
     vd = importlib.import_module('singularity_analysis.velocity_demo')
     inverse = vd.simulate(toolbox_robot, 'inverse', 0.05, 0.05)
