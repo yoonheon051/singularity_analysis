@@ -2,6 +2,7 @@
 #   Ubuntu 24.04 + Python 3.12 = ROS2 Jazzy,  Ubuntu 22.04 + Python 3.10 = ROS2 Humble
 # - pytest:    ROS 없이 도는 테스트 전부 + 실제 Robotics Toolbox 교차 검증(test_toolbox.py)
 # - ros-build: 공식 ROS 컨테이너에서 setup.sh 로 설치·빌드하고, launch 를 띄워 실제로 동작하는지 확인
+#              ROS 패키지를 매번 새로 받아 오래 걸리므로(7~25분) PR 과 main 에 들어갈 때(머지)만, 또는 수동 실행 때만 돈다
 name: tests
 
 on:
@@ -35,6 +36,7 @@ jobs:
 
   ros-build:
     name: setup.sh + launch (${{ matrix.ros }})
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     container: ros:${{ matrix.ros }}     # jazzy = Ubuntu 24.04, humble = Ubuntu 22.04
     strategy:
