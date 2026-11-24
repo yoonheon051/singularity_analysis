@@ -75,8 +75,9 @@ flowchart TD
 
 | 내용 | 파일 | 구현 |
 |---|---|---|
-| 공통 계산 (지표, 분류, 타원체, 근접도, 상태 JSON) | `singularity.py` | NumPy 만 사용. `analyze`, `classify`, `proximity`, `index_gradient`, `build_status` |
-| 모델 생성 | `singularity.py` | URDF 에서 팔 6축만 남겨 Toolbox `URDF_read` |
+| 특이점 계산 (지표, 종류 분류, 타원체) | `singularity.py` | NumPy 만 사용. `analyze`, `singularity_indices`, `classify`, `ellipsoid` |
+| 대시보드용 상태 | `status.py` | `proximity`, `index_gradient`, `joint_risk`, `arm_geometry`, `build_status` |
+| 모델 생성·경로 | `robot_model.py` | `arm_only_urdf` 로 팔 6축만 남겨 Toolbox 모델(`load_robot`), `default_urdf`, `results_dir` |
 | 실시간 노드 | `m0609_ros_analyzer.py` | 구독·CSV·토픽·마커 |
 | 대시보드 | `dashboard/index.html`, `dashboard_server.py` | 외부 라이브러리 없는 HTML + 표준 라이브러리 HTTP 서버, rosbridge WebSocket 직접 사용 |
 | 그래프·데모 | `visualize_results.py`, `plot_ellipsoid.py`, `velocity_demo.py`, `calculate_jacobian.py` | |
@@ -109,7 +110,7 @@ flowchart TD
 
 ## 테스트
 
-ROS 없이 도는 테스트 53개와, Robotics Toolbox 가 있을 때 추가로 도는 교차 검증 14개입니다. Toolbox 대신 같은 M0609 URDF 로 직접 만든 NumPy 기구학(`test/conftest.py` 의 `ReferenceRobot`)을 쓰고, 분석 노드는 가짜 `rclpy` 로 실행합니다.
+ROS 없이 도는 테스트 54개와, Robotics Toolbox 가 있을 때 추가로 도는 교차 검증 14개입니다. Toolbox 대신 같은 M0609 URDF 로 직접 만든 NumPy 기구학(`test/conftest.py` 의 `ReferenceRobot`)을 쓰고, 분석 노드는 가짜 `rclpy` 로 실행합니다.
 
 ```bash
 python3 -m pytest singularity_analysis/test -v      # 저장소 최상위에서

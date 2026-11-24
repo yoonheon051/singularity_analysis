@@ -1,5 +1,5 @@
 """
-singularity.py 와 velocity_demo.py 검증 (ROS·Robotics Toolbox 없이 실행 가능)
+singularity.py · robot_model.py(URDF 정리) · velocity_demo.py 검증 (ROS·Robotics Toolbox 없이 실행 가능)
 
 Toolbox 대신, 같은 M0609 URDF로 직접 만든 NumPy 기구학(conftest.ReferenceRobot)을 쓴다.
 """
@@ -10,6 +10,7 @@ import pytest
 
 from conftest import ELBOW_NEAR, NORMAL, URDF, WRIST_NEAR, needs_urdf
 from singularity_analysis import singularity as sg
+from singularity_analysis import robot_model as rm
 
 pytestmark = needs_urdf
 
@@ -23,21 +24,21 @@ def shoulder_pose(robot):
 # ---------------------------------------------------------------- URDF 정리
 
 def test_arm_only_keeps_base_to_link6_chain():
-    xml = sg.arm_only_urdf(sg.read_urdf(URDF))
+    xml = rm.arm_only_urdf(rm.read_urdf(URDF))
     root = ET.fromstring(xml)
     links = [l.get('name') for l in root.findall('link')]
     assert set(links) == {'base_link', 'link_1', 'link_2', 'link_3', 'link_4', 'link_5', 'link_6'}   # 'base', 'tool0' 제거
     assert [j.get('name') for j in root.findall('joint')] == sg.JOINT_NAMES
     assert not root.findall('.//visual') and not root.findall('.//collision')
-    assert sg.root_link(xml) == 'base_link'
+    assert rm.root_link(xml) == 'base_link'
 
 
 def test_arm_only_drops_gripper_and_mimic_joints(gripper_urdf):
     # link_6 뒤에 그리퍼(미믹 관절 포함)를 붙인 URDF 를 줘도 팔 6축만 남아야 함
-    arm = ET.fromstring(sg.arm_only_urdf(gripper_urdf))
+    arm = ET.fromstring(rm.arm_only_urdf(gripper_urdf))
     assert [j.get('name') for j in arm.findall('joint')] == sg.JOINT_NAMES
     with pytest.raises(ValueError):
-        sg.arm_only_urdf(gripper_urdf, end_link='no_such_link')
+        rm.arm_only_urdf(gripper_urdf, end_link='no_such_link')
 
 
 # ---------------------------------------------------------------- 기구학·지표

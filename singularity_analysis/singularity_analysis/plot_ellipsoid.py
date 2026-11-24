@@ -23,10 +23,10 @@ import matplotlib.pyplot as plt
 
 try:                                  # ros2 run / 패키지로 설치했을 때
     from . import singularity as sg
-    from .calculate_jacobian import load_robot
+    from .robot_model import default_urdf, link_position, load_robot, results_dir
 except ImportError:                   # python3 파일경로로 직접 실행할 때
     import singularity as sg
-    from calculate_jacobian import load_robot
+    from robot_model import default_urdf, link_position, load_robot, results_dir
 
 LINKS = ['base_link', 'link_1', 'link_2', 'link_3', 'link_4', 'link_5', 'link_6']
 
@@ -40,15 +40,9 @@ DEFAULT_POSES = [
 SCALE = 0.3   # 타원체 반지름(m/s per rad/s)을 그림에서 몇 m 로 그릴지
 
 
-def to_matrix(T):
-    """Toolbox 의 SE3 또는 4x4 배열 → 4x4 numpy 배열"""
-    return np.asarray(T.A if hasattr(T, 'A') else T, dtype=float)
-
-
 def link_points(robot, q):
     """팔 모양을 그리기 위한 각 링크 원점 위치들"""
-    pts = [to_matrix(robot.fkine(q, end=name))[:3, 3] for name in LINKS if name in robot.link_dict]
-    return np.array(pts)
+    return np.array([link_position(robot, q, name) for name in LINKS if name in robot.link_dict])
 
 
 def draw_ellipsoid(ax, pts, center, U, s, singular, title):
@@ -76,7 +70,7 @@ def draw_ellipsoid(ax, pts, center, U, s, singular, title):
 def draw_pose(ax_lin, ax_ang, robot, title, q):
     a = sg.analyze(robot, q)
     pts = link_points(robot, q)
-    wrist_center = to_matrix(robot.fkine(q, end=sg.WRIST_LINK))[:3, 3]
+    wrist_center = link_position(robot, q, sg.WRIST_LINK)
     U_a, s_a = a['ellipsoid_arm']
     U_w, s_w = a['ellipsoid_wrist']
     # 작은 반지름 / 큰 반지름: 1이면 구, 0에 가까우면 납작
@@ -98,7 +92,7 @@ def main():
     ap.add_argument("--no-show", action="store_true", help="화면에 띄우지 않고 파일만 저장")
     args = ap.parse_args()
 
-    robot = load_robot(args.urdf or sg.default_urdf())
+    robot = load_robot(args.urdf or default_urdf())
     poses = [(f"q = {np.round(q, 2).tolist()}", q) for q in args.q] if args.q else DEFAULT_POSES
 
     # 자세마다 한 열: 윗줄 선속도, 아랫줄 각속도
@@ -116,7 +110,7 @@ def main():
                  'bottom: wrist joints 4-6 angular velocity, red arrow: hardest direction', fontsize=12)
     plt.tight_layout()
 
-    out = os.path.join(sg.results_dir(), 'manipulability_ellipsoids.png')
+    out = os.path.join(results_dir(), 'manipulability_ellipsoids.png')
     plt.savefig(out, dpi=150)
     print(f"그래프 저장: {out}")
     if not args.no_show:

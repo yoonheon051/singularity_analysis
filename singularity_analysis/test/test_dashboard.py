@@ -1,7 +1,7 @@
 """
 실시간 대시보드 관련 검증 (ROS 없이 실행)
 
-- singularity.py: 지표 → 물리량·근접도(%)·도달 예상 시간·벗어나는 방향, 상태 JSON
+- status.py: 지표 → 물리량·근접도(%)·도달 예상 시간·벗어나는 방향, 상태 JSON
 - 분석 노드: 실제 로봇용 파라미터(관절 토픽·URDF 파일), /singularity/status 발행·빈도 제한·관절 속도
 - dashboard_server: index.html 을 HTTP 로 내보내는지
 """
@@ -17,46 +17,47 @@ import pytest
 
 from conftest import ELBOW_NEAR, NORMAL, URDF, WRIST_NEAR, needs_urdf
 from singularity_analysis import singularity as sg
+from singularity_analysis import status as st
 
 # ---------------------------------------------------------------- 물리량·근접도
 
 
 def test_physical_values():
-    assert sg.physical_value('wrist', math.sin(math.radians(10))) == pytest.approx(10.0)
-    assert sg.physical_value('elbow', 1.0) == pytest.approx(90.0)
-    assert sg.physical_value('wrist', 1.2) == pytest.approx(90.0)          # 수치 오차로 1을 넘어도 안전
-    assert sg.physical_value('shoulder', 0.05) == pytest.approx(0.05 * sg.ARM_LENGTH * 100)   # 약 3.9 cm
+    assert st.physical_value('wrist', math.sin(math.radians(10))) == pytest.approx(10.0)
+    assert st.physical_value('elbow', 1.0) == pytest.approx(90.0)
+    assert st.physical_value('wrist', 1.2) == pytest.approx(90.0)          # 수치 오차로 1을 넘어도 안전
+    assert st.physical_value('shoulder', 0.05) == pytest.approx(0.05 * sg.ARM_LENGTH * 100)   # 약 3.9 cm
 
 
 @pytest.mark.parametrize('kind', sg.TYPES)
 def test_proximity_scale(kind):
     limit = sg.LIMITS[kind]
-    assert sg.proximity(kind, limit * sg.WARN_FACTOR) == 0.0      # 경고 시작
-    assert sg.proximity(kind, 1.0) == 0.0                         # 멀리
-    assert sg.proximity(kind, limit) == 1.0                       # 임계값 = 특이점 근처로 분류되는 경계
-    assert sg.proximity(kind, 0.0) == 1.0
-    mid = limit * (1 + sg.WARN_FACTOR) / 2
-    assert sg.proximity(kind, mid) == pytest.approx(0.5)
+    assert st.proximity(kind, limit * st.WARN_FACTOR) == 0.0      # 경고 시작
+    assert st.proximity(kind, 1.0) == 0.0                         # 멀리
+    assert st.proximity(kind, limit) == 1.0                       # 임계값 = 특이점 근처로 분류되는 경계
+    assert st.proximity(kind, 0.0) == 1.0
+    mid = limit * (1 + st.WARN_FACTOR) / 2
+    assert st.proximity(kind, mid) == pytest.approx(0.5)
 
 
 def test_level_matches_classification_boundary():
-    assert sg.level_of(None) == 'safe'
-    assert sg.level_of(0.0) == 'safe'
-    assert sg.level_of(0.3) == 'caution'
-    assert sg.level_of(1.0) == 'danger'
+    assert st.level_of(None) == 'safe'
+    assert st.level_of(0.0) == 'safe'
+    assert st.level_of(0.3) == 'caution'
+    assert st.level_of(1.0) == 'danger'
 
 
 def test_time_to_limit():
-    assert sg.time_to_limit(0.3, -0.1, 0.1) == pytest.approx(2.0)
-    assert sg.time_to_limit(0.3, 0.1, 0.1) is None        # 멀어지는 중
-    assert sg.time_to_limit(0.05, -0.1, 0.1) is None      # 이미 안쪽
-    assert sg.time_to_limit(0.3, None, 0.1) is None       # 속도 모름
-    assert sg.time_to_limit(0.9, -0.01, 0.1) is None      # 30초보다 멂
+    assert st.time_to_limit(0.3, -0.1, 0.1) == pytest.approx(2.0)
+    assert st.time_to_limit(0.3, 0.1, 0.1) is None        # 멀어지는 중
+    assert st.time_to_limit(0.05, -0.1, 0.1) is None      # 이미 안쪽
+    assert st.time_to_limit(0.3, None, 0.1) is None       # 속도 모름
+    assert st.time_to_limit(0.9, -0.01, 0.1) is None      # 30초보다 멂
 
 
 def test_escape_direction():
-    assert sg.escape_direction([0, 0.1, 0, 0, -2.0, 0]) == {'joint': 5, 'direction': -1}
-    assert sg.escape_direction(np.zeros(6)) is None
+    assert st.escape_direction([0, 0.1, 0, 0, -2.0, 0]) == {'joint': 5, 'direction': -1}
+    assert st.escape_direction(np.zeros(6)) is None
 
 
 # ---------------------------------------------------------------- 기울기·상태 (M0609 모델)
@@ -64,7 +65,7 @@ def test_escape_direction():
 @needs_urdf
 def test_gradient_matches_central_difference(robot):
     q = np.array([0.3, -0.5, 1.2, 0.4, 0.8, -0.2])
-    grad = sg.index_gradient(robot, q)
+    grad = st.index_gradient(robot, q)
     h = 1e-4
     for i in range(6):
         e = np.eye(6)[i] * h
@@ -77,11 +78,11 @@ def test_gradient_matches_central_difference(robot):
 @needs_urdf
 def test_wrist_escape_is_joint5(robot):
     # q5 = +0.05 에서 손목 특이점(q5 = 0)을 벗어나려면 q5 를 + 방향으로
-    grad = sg.index_gradient(robot, WRIST_NEAR)
-    assert sg.escape_direction(grad['wrist']) == {'joint': 5, 'direction': 1}
+    grad = st.index_gradient(robot, WRIST_NEAR)
+    assert st.escape_direction(grad['wrist']) == {'joint': 5, 'direction': 1}
     q = list(WRIST_NEAR)
     q[4] = -0.05
-    assert sg.escape_direction(sg.index_gradient(robot, q)['wrist']) == {'joint': 5, 'direction': -1}
+    assert st.escape_direction(st.index_gradient(robot, q)['wrist']) == {'joint': 5, 'direction': -1}
 
 
 @needs_urdf
@@ -90,7 +91,7 @@ def test_status_eta_for_wrist_approach(robot):
     q = np.array([0, -0.3, 1.2, 0, 0.2, 0])
     qdot = np.array([0, 0, 0, 0, -0.1, 0])
     a = sg.analyze(robot, q)
-    s = sg.build_status(a, q, qdot=qdot, grad=sg.index_gradient(robot, q, base=a['indices']))
+    s = st.build_status(a, q, qdot=qdot, grad=st.index_gradient(robot, q, base=a['indices']))
     w = s['kinds']['wrist']
     assert w['rate'] < 0
     expected = (math.sin(0.2) - sg.WRIST_LIMIT) / (0.1 * math.cos(0.2))   # 1차 근사
@@ -104,14 +105,14 @@ def test_status_eta_for_wrist_approach(robot):
                                             (ELBOW_NEAR, 'elbow', 'danger')])
 def test_status_summary(robot, q, kind, level):
     a = sg.analyze(robot, q)
-    s = sg.build_status(a, q, grad=sg.index_gradient(robot, q))
+    s = st.build_status(a, q, grad=st.index_gradient(robot, q))
     assert s['level'] == level
     assert s['type'] == sg.label(a['types'])
     if kind:
         assert s['dominant'] == kind and s['risk'] == 1.0
     assert set(s['kinds']) == set(sg.TYPES)
     for t, d in s['kinds'].items():
-        assert d['value'] == pytest.approx(sg.physical_value(t, a['indices'][t]))
+        assert d['value'] == pytest.approx(st.physical_value(t, a['indices'][t]))
         assert d['rate'] is None and d['eta'] is None     # 속도를 안 줬음
 
 
@@ -120,44 +121,44 @@ def test_status_json_has_no_infinity(robot):
     q = [0, -0.3, 1.2, 0, 0.0, 0]                       # 정확히 손목 특이점 → 조건수가 매우 크거나 inf
     a = sg.analyze(robot, q)
     a['condition_number'] = float('inf')                 # 완전 특이인 경우를 강제로
-    text = json.dumps(sg.build_status(a, q), allow_nan=False)
+    text = json.dumps(st.build_status(a, q), allow_nan=False)
     assert json.loads(text)['condition_number'] is None
 
 
 def test_status_without_wrist_link():
     a = {'indices': None, 'types': [], 'manipulability': 0.02, 'condition_number': 20.0, 'sigma_min': 0.1}
-    s = sg.build_status(a, [0.0] * 6)
+    s = st.build_status(a, [0.0] * 6)
     assert s['kinds'] == {} and s['risk'] is None and s['level'] == 'safe'
     assert s['joint_risk'] is None and s['geometry'] is None
 
 
 def test_joint_risk_follows_involved_joints():
     kinds = {'wrist': {'proximity': 0.8}, 'elbow': {'proximity': 0.3}, 'shoulder': {'proximity': 0.0}}
-    assert sg.joint_risk(kinds) == [0.0, 0.3, 0.3, 0.8, 0.8, 0.8]
-    assert sg.joint_risk({}) is None
+    assert st.joint_risk(kinds) == [0.0, 0.3, 0.3, 0.8, 0.8, 0.8]
+    assert st.joint_risk({}) is None
 
 
 def test_joint_eta_takes_earliest_involved_condition():
     kinds = {'wrist': {'eta': 2.0}, 'elbow': {'eta': None}, 'shoulder': {'eta': 0.5}}
-    assert sg.joint_eta(kinds) == [0.5, None, None, 2.0, 2.0, 2.0]
-    assert sg.joint_eta({}) is None
+    assert st.joint_eta(kinds) == [0.5, None, None, 2.0, 2.0, 2.0]
+    assert st.joint_eta({}) is None
 
 
 @needs_urdf
 @pytest.mark.parametrize('q, hot', [(NORMAL, []), (WRIST_NEAR, [4, 5, 6]), (ELBOW_NEAR, [2, 3])])
 def test_joint_risk_in_status(robot, q, hot):
     a = sg.analyze(robot, q)
-    risk = sg.build_status(a, q)['joint_risk']
+    risk = st.build_status(a, q)['joint_risk']
     assert [j for j in range(1, 7) if risk[j - 1] >= 1.0] == hot   # 특이점 근처면 관여하는 관절만 빨강(100%)
 
 
 @needs_urdf
 def test_arm_geometry_matches_kinematics(robot):
     q = np.array([0.3, -0.5, 1.2, 0.4, 0.8, -0.2])
-    g = sg.arm_geometry(robot, q)
+    g = st.arm_geometry(robot, q)
     J = robot.jacob0(q)
     assert len(g['joints']) == 6 and len(g['axes']) == 6
-    for i, name in enumerate(sg.LINK_NAMES):
+    for i, name in enumerate(st.LINK_NAMES):
         assert g['joints'][i] == pytest.approx(robot.fkine(q, end=name)[:3, 3])
         assert g['axes'][i] == pytest.approx(J[3:, i])
         assert np.linalg.norm(g['axes'][i]) == pytest.approx(1.0)

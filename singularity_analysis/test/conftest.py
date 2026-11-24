@@ -20,6 +20,7 @@ PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PKG_DIR not in sys.path:
     sys.path.insert(0, PKG_DIR)
 from singularity_analysis import singularity as sg  # noqa: E402
+from singularity_analysis import robot_model as rm  # noqa: E402
 
 URDF = os.path.normpath(os.path.join(PKG_DIR, '..', 'my_robot_description', 'urdf', 'm0609.urdf.xacro'))
 URDF_RG2 = os.path.normpath(os.path.join(PKG_DIR, '..', 'my_robot_description', 'urdf', 'm0609_rg2.urdf.xacro'))
@@ -92,7 +93,7 @@ class ReferenceRobot:
 def robot():
     if not HAS_URDF:
         pytest.skip('my_robot_description URDF 가 없음')
-    return ReferenceRobot(sg.arm_only_urdf(sg.read_urdf(URDF)))
+    return ReferenceRobot(rm.arm_only_urdf(rm.read_urdf(URDF)))
 
 
 @pytest.fixture(scope='session')
@@ -100,7 +101,7 @@ def gripper_urdf():
     """M0609 + 그리퍼(link_6 에 고정, 손가락 관절 2개 중 하나는 미믹)"""
     if not HAS_URDF:
         pytest.skip('my_robot_description URDF 가 없음')
-    root = ET.fromstring(sg.read_urdf(URDF))
+    root = ET.fromstring(rm.read_urdf(URDF))
     for name in ('gripper_base', 'left_finger', 'right_finger'):
         ET.SubElement(root, 'link', {'name': name})
     j = ET.SubElement(root, 'joint', {'name': 'tool_mount', 'type': 'fixed'})

@@ -4,7 +4,7 @@
 확인하는 것
 - 그리퍼 URDF 를 받아도 팔 6축 모델을 만들고, /joint_states 의 관절을 이름으로 찾는지
 - CSV 기록(헤더, 값, 1초 flush, 종료 시 닫기), 지표 토픽, RViz 타원체 마커
-- 특이점 종류가 바뀔 때만 경고, 관절 이름이 안 맞으면 경고 한 번
+- 특이점 종류가 바뀔 때만 경고, 관절 이름이 안 맞으면 경고 한 번, 처리 오류 로그는 빈도 제한
 """
 import csv
 import importlib
@@ -116,6 +116,17 @@ def test_missing_joint_names_warn_once(node):
         node.ros.subs['/joint_states'](types.SimpleNamespace(name=['joint1', 'joint2'], position=[0.0, 0.0]))
     assert len([w for w in warnings(node) if '찾지 못해' in w]) == 1
     assert rows(node) == []
+
+
+def test_processing_error_log_is_throttled(node):
+    """처리 중 오류가 나도 노드는 살아 있고, 오류 로그는 빈도 제한(throttle)을 걸어 찍는다"""
+    bad = types.SimpleNamespace(name=list(sg.JOINT_NAMES), position=['x'] * 6)   # 숫자가 아닌 관절값
+    for _ in range(3):
+        node.ros.subs['/joint_states'](bad)
+    errors = [(m, k) for level, m, k in node.ros.logs if level == 'error']
+    assert errors and all(k.get('throttle_duration_sec') == node.module.LOG_EVERY_SEC for _, k in errors)
+    send(node, NORMAL)                       # 그 뒤 정상 메시지는 그대로 처리
+    assert len(rows(node)) == 1
 
 
 def test_bad_urdf_stops_with_error(ros_stubs, tmp_path):

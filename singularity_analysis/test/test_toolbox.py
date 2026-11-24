@@ -12,6 +12,7 @@ import pytest
 
 from conftest import NORMAL, URDF, URDF_RG2, WRIST_NEAR, ReferenceRobot, needs_urdf
 from singularity_analysis import singularity as sg
+from singularity_analysis import robot_model as rm
 
 pytestmark = needs_urdf
 try:
@@ -28,13 +29,13 @@ def as_matrix(T):
 
 @pytest.fixture(scope='module')
 def toolbox_robot():
-    from singularity_analysis.calculate_jacobian import load_robot
+    from singularity_analysis.robot_model import load_robot
     return load_robot(URDF)
 
 
 @pytest.fixture(scope='module')
 def reference():
-    return ReferenceRobot(sg.arm_only_urdf(sg.read_urdf(URDF)))
+    return ReferenceRobot(rm.arm_only_urdf(rm.read_urdf(URDF)))
 
 
 def test_arm_only_model_has_six_joints(toolbox_robot):
@@ -61,7 +62,7 @@ def test_analysis_matches_reference(toolbox_robot, reference, q):
 
 def test_raw_urdf_has_ambiguous_end_effector():
     """docs/theory.md '말단 링크를 link_6 으로 지정하는 이유'의 근거: 원본 URDF 를 그대로 불러오면 끝 링크가 둘(base, tool0)"""
-    from singularity_analysis.calculate_jacobian import toolbox_robot_from_file
+    from singularity_analysis.robot_model import toolbox_robot_from_file
     raw = toolbox_robot_from_file(URDF)
     names = [link.name for link in raw.ee_links]
     assert 'base' in names and 'tool0' in names
@@ -69,7 +70,7 @@ def test_raw_urdf_has_ambiguous_end_effector():
 
 def test_gripper_xacro_loads_as_six_joints():
     pytest.importorskip('xacro')
-    from singularity_analysis.calculate_jacobian import load_robot
+    from singularity_analysis.robot_model import load_robot
     robot = load_robot(URDF_RG2)
     assert robot.n == 6
 
@@ -89,7 +90,7 @@ def test_velocity_demo_numbers(toolbox_robot):
 def test_loader_uses_non_deprecated_api():
     """Toolbox 1.5 이상에서는 deprecated 인 Robot.URDF() 를 부르지 않아야 함 (경고 없이 불러오기)"""
     import warnings
-    from singularity_analysis.calculate_jacobian import load_robot
+    from singularity_analysis.robot_model import load_robot
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
         load_robot(URDF)

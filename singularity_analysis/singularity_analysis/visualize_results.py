@@ -1,54 +1,47 @@
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+"""
+분석 CSV 그래프 (ros2 run singularity_analysis visualize_results [CSV 경로])
+
+인자가 없으면 결과 폴더에서 가장 최근 실행의 CSV 를 그린다. 그래프는 화면에 띄우고 CSV 옆에 ..._plot.png 로도 저장.
+
+1. 가동성 지수 (Manipulability, w)
+   0 에 가까워지면 특이점. 그래프의 골짜기(V자)가 가장 부자유스러운 지점. 점선(0.01)은 경고선.
+2. 조건수 (Condition Number = σmax / σmin)
+   1 이면 모든 방향으로 고르게 움직이는 이상적 상태, 커질수록 제어 불안정. 로그 스케일, 무한대(완전 특이점)는 빨간 X.
+3. 특이점 종류 지표 (새 CSV 에만 있음, singularity.py 참고)
+   wrist / elbow / shoulder 지표: 0 에 가까울수록 그 종류의 특이점. 점선(임계값) 아래인 구간은 위 그래프 배경을 색칠.
+"""
 import os
 import sys
 
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
 try:                                  # ros2 run / 패키지로 설치했을 때
     from . import singularity as sg
+    from .robot_model import results_dir
 except ImportError:                   # python3 파일경로로 직접 실행할 때
-    import singularity as sg   # 같은 폴더: 특이점 종류 임계값
-
-"""
-[ 로봇 기구학 성능 지표 시각화 가이드 ]
-
-1. 가동성 지수 (Manipulability Index, w)
-   - 의미: 로봇이 현재 자세에서 모든 방향으로 얼마나 자유롭게 움직일 수 있는가?
-   - 수치: 0에 가까워지면 '특이점(Singularity)' 상태로, 특정 방향으로의 이동이 물리적으로 불가능해짐.
-   - 분석: 그래프의 골짜기(V자)는 로봇이 작업 중 가장 부자유스러운 지점을 의미함.
-
-2. 조건수 (Condition Number)
-   - 의미: 자코비안 행렬의 수치적 안정성 (최대 특이값 / 최소 특이값).
-   - 수치: 1이면 모든 방향으로 균일한 속도를 내는 '이상적 상태(Isotropic)', 커질수록 제어 불안정.
-   - 분석: 그래프의 피크(A자)는 제어 오차가 증폭되어 로봇이 튀거나 멈출 수 있는 위험 구간임.
-
-3. 특이점 종류 (새 CSV에만 있음, singularity.py 참고)
-   - wrist / elbow / shoulder 지표: 0에 가까울수록 그 종류의 특이점. 점선(임계값) 아래면 위 그래프 배경을 색칠.
-"""
+    import singularity as sg
+    from robot_model import results_dir
 
 # 특이점 종류별 색 (그래프 배경·지표 선)
 TYPE_COLORS = {'wrist': 'tab:orange', 'elbow': 'tab:purple', 'shoulder': 'tab:cyan'}
 
 
 def plot_singularity_metrics(csv_path):
-    # 1. 파일 존재 여부 확인(예외처리)
     if not os.path.exists(csv_path):
         print(f"에러: {csv_path} 파일을 찾을 수 없습니다.")
         return
-    
-    # 2. 데이터 로드: Pandas를 이용해 CSV를 구조화된 데이터프레임으로 변환
+
     df = pd.read_csv(csv_path)
 
-    # 3. 캔버스 설정: 그래프를 세로로 배치
-    # 특이점 종류 열(singularity_type, *_idx)이 있는 새 CSV면 3행, 예전 CSV면 2행
-    # figsize: 그래프 크기, sharex: X축(시간 / 샘플 수)을 그래프들이 공유하도록 설정
+    # 특이점 종류 열(singularity_type, *_idx)이 있는 새 CSV면 3행, 예전 CSV면 2행. X축(샘플 순서)은 공유
     has_types = {'singularity_type', 'wrist_idx', 'elbow_idx', 'shoulder_idx'} <= set(df.columns)
     if has_types:
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 13), sharex=True)
     else:
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
 
-    # x_axis: 수집된 데이터의 개수만큼 인덱스 생성(시간의 흐름)
     x_axis = range(len(df))
 
     ###############################################
@@ -61,10 +54,10 @@ def plot_singularity_metrics(csv_path):
     # 가동성 지표의 임계값(0.01)표시: 이 선 아래로 떨어지면 특이점 위험 경고
     ax1.axhline(y=0.01, color='red', linestyle=':', label='Critical Threshold')    
     
-    ax1.set_ylabel('Index Value (w)')                    # Y축 라벨: 가동성 수치
-    ax1.set_title('Robot Manipulability Over Time')      # 그래프 제목
-    ax1.grid(True, linestyle='--', alpha=0.7)            # 격자 표시
-    ax1.legend()                                         # 범례 표시
+    ax1.set_ylabel('Index Value (w)')
+    ax1.set_title('Robot Manipulability Over Time')
+    ax1.grid(True, linestyle='--', alpha=0.7)
+    ax1.legend()
 
     ##############################################
     # --- 하단 그래프: 조건수 (Condition Number) --- #
@@ -125,10 +118,9 @@ def plot_singularity_metrics(csv_path):
         ax3.grid(True, linestyle='--', alpha=0.7)
         ax3.legend(loc='upper right')
 
-    # 4. 레이아웃 최적화: 그래프 간 간격 자동 조정 및 화면 출력
     plt.tight_layout()
 
-    # 5. 그래프를 CSV와 같은 폴더에 CSV 이름을 딴 이미지로 저장 (화면이 없는 환경에서도 결과가 남도록)
+    # CSV 옆에 이미지로도 저장 (화면이 없는 환경에서도 결과가 남도록)
     png_path = os.path.splitext(csv_path)[0] + '_plot.png'
     plt.savefig(png_path, dpi=150)
     print(f"그래프 저장: {png_path}")
@@ -146,11 +138,10 @@ def latest_csv(results_dir):
 def main():
     # 인자가 없으면 결과 폴더(~/singularity_results 또는 SINGULARITY_RESULTS_DIR)에서 가장 최근 실행의 CSV 를 그림
     # 다른 파일을 보려면 인자로 경로를 준다: visualize_results ~/singularity_results/analysis_20261120_153000.csv
-    csv_file = sys.argv[1] if len(sys.argv) > 1 else latest_csv(sg.results_dir())
+    csv_file = sys.argv[1] if len(sys.argv) > 1 else latest_csv(results_dir())
     print(f"그릴 파일: {csv_file}")
     plot_singularity_metrics(csv_file)
 
 
-# 파이썬 스크립트 실행 엔트리 포인트
 if __name__ == "__main__":
     main()

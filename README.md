@@ -137,7 +137,9 @@ singularity_analysis/                  # 저장소 (~/colcon_ws/src 에 clone)
     ├── launch/analysis.launch.py      #   시뮬레이션/실제 로봇 + 분석 + 대시보드 한 번에
     ├── dashboard/index.html           #   웹 대시보드 (외부 라이브러리 없음)
     ├── singularity_analysis/          #   파이썬 모듈
-    │   ├── singularity.py             #     공통 계산: 지표, 특이점 분류, 타원체, 근접도 (NumPy만 사용)
+    │   ├── singularity.py             #     특이점 계산: Jacobian 지표, 종류 분류, 타원체 (NumPy만 사용)
+    │   ├── status.py                  #     대시보드용 상태: 근접도, 도달 예상 시간, 관절별 위험도
+    │   ├── robot_model.py             #     URDF 정리, Toolbox 모델 만들기, 기본 경로
     │   ├── m0609_ros_analyzer.py      #     실시간 분석 노드
     │   ├── dashboard_server.py        #     대시보드 웹 서버
     │   ├── visualize_results.py       #     CSV 그래프

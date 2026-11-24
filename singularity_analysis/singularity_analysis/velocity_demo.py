@@ -26,10 +26,10 @@ import matplotlib.pyplot as plt
 
 try:                                  # ros2 run / 패키지로 설치했을 때
     from . import singularity as sg
-    from .calculate_jacobian import load_robot
+    from .robot_model import default_urdf, load_robot, results_dir, to_matrix
 except ImportError:                   # python3 파일경로로 직접 실행할 때
     import singularity as sg
-    from calculate_jacobian import load_robot
+    from robot_model import default_urdf, load_robot, results_dir, to_matrix
 
 
 Q_START = [0, -0.3, 1.2, 0, 0.3, 0]   # 시작 자세 (q5 = 0.3 rad)
@@ -38,10 +38,6 @@ DURATION = 5.0                        # 이동 시간 (s) → 5 cm/s
 DT = 0.002                            # 시뮬레이션 간격 (s)
 GAIN = 5.0                            # 위치·자세 오차 보정 이득 (1/s)
 JOINT_SPEED_LIMIT = 2.618             # M0609 URDF 관절 최대 속도 (rad/s)
-
-
-def to_matrix(T):
-    return np.asarray(T.A if hasattr(T, 'A') else T, dtype=float)
 
 
 def rotation_error(R_des, R):
@@ -106,7 +102,7 @@ def main():
     ap.add_argument("--no-show", action="store_true", help="화면에 띄우지 않고 파일만 저장")
     args = ap.parse_args()
 
-    robot = load_robot(args.urdf or sg.default_urdf())
+    robot = load_robot(args.urdf or default_urdf())
     runs = {
         'Inverse  J^-1': ('inverse', 'tab:red'),
         f'Inverse + speed limit ({JOINT_SPEED_LIMIT} rad/s)': ('inverse_limited', 'tab:orange'),
@@ -156,7 +152,7 @@ def main():
         ax.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
 
-    out = os.path.join(sg.results_dir(), 'velocity_dls_demo.png')
+    out = os.path.join(results_dir(), 'velocity_dls_demo.png')
     plt.savefig(out, dpi=130)
     print(f"그래프 저장: {out}")
     if not args.no_show:
